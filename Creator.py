@@ -164,3 +164,41 @@ class DiffusionCreator:
     def to(self, device):
         self.pipe.to(device)
         self.randGenerator = torch.Generator(device=device)
+
+
+# example
+# if __name__ == "__main__":
+#     creator = DiffusionCreator(modelWeightRoot=r'path-to-model-weight',
+#                                defaultModel='.model1',  # To use local weight you should start with "."
+#                                defaultDType=torch.bfloat16,
+#                                useXformers=True)
+
+#     blendParamDictList = ({'name': '.model1', 'factor': 0.4},
+#                           {'name': '.model2', 'factor': 0.6})
+
+#     creator.loadBlendModel(blendParamDictList)
+#     creator.blendModel(blendParamDictList)
+#     creator.to('cuda')
+#     artistGen = RandomArtistGenerator()
+#     sizeGen = RandomImageSizeGenerator(sizeSet='big')
+#     promptGen = PromptGenerator(
+#         [  
+#             'fdgdgdgdfgdgf'
+#         ],
+#         negativePrompt='closed eyes,slanted eyes,ugly,Polydactyly,handicapped,extra fingers,fused fingers,poorly drawn hands,extra legs,one leg,woman underwear,low quality,low res,blurry,draft,text,watermark,signature,two heads,mutated hands,mutation,deformed, bad anatomy, bad proportions,too many fingers,morbid, mutilated, extra limbs,disfigured,missing arms,missing legs,extra arms,malformed limbs',
+#         artistGenerator=RandomArtistGenerator()
+#     )
+
+#     while True:
+#         randomSize = sizeGen.getSize()
+#         randomArtist = artistGen.getArtist()
+
+#         genArgDict = {
+#             'height': randomSize[0],
+#             'width': randomSize[1],
+#             'num_inference_steps': 60,
+#             'guidance_scale': 7.5
+#         }
+#         genArgDict.update(promptGen.getPrompt())
+#         creator.generate(
+#             '', extraArgDict=genArgDict)
