@@ -226,6 +226,10 @@ def get_unweighted_text_embeddings(
             text_input_chunk[:, 0] = text_input[0, 0]
             text_input_chunk[:, -1] = text_input[0, -1]
             text_embedding = pipe.text_encoder(text_input_chunk)[0]
+            
+            # If apply last second layer output method
+            # penultimateH = pipe.text_encoder(text_input_chunk, output_hidden_states=True)['hidden_states'][-2]
+            # text_embedding = pipe.text_encoder.text_model.final_layer_norm(penultimateH)
 
             if no_boseos_middle:
                 if i == 0:
