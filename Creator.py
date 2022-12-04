@@ -1,3 +1,4 @@
+from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 import csv
 import random
 import torch
@@ -7,7 +8,7 @@ from transformers import CLIPTextModel
 import json
 import piexif
 torch.backends.cuda.matmul.allow_tf32 = True
-from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
+
 
 class RandomArtistGenerator:
     def __init__(self, artistDatabase='assets/artists.csv') -> None:
@@ -22,7 +23,7 @@ class RandomArtistGenerator:
 
 
 class RandomImageSizeGenerator:
-    def __init__(self, sizeSet='big',customSizeList=None) -> None:
+    def __init__(self, sizeSet='big', customSizeList=None) -> None:
         self.sizeListDict = {
             'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896), (1088, 512)],
             'small': [(768, 768), (512, 512), (768, 640), (768, 512)]
@@ -37,6 +38,22 @@ class RandomImageSizeGenerator:
         if random.random() > 0.5:
             size = (size[1], size[0])
         return size
+
+
+class PromptGenerator:
+    def __init__(self, promptList, negativePrompt=None, artistGenerator=None) -> None:
+        self.artistGenerator = artistGenerator
+        self.promptList = promptList
+        self.negativePrompt = negativePrompt
+
+    def getPrompt(self):
+        prompt = random.choice(self.promptList)
+        if self.artistGenerator:
+            prompt = prompt+',by artist '+self.artistGenerator.getArtist()
+        return {
+            'prompt': prompt,
+            'negative_prompt': self.negativePrompt
+        }
 
 
 class DiffusionCreator:
@@ -60,7 +77,8 @@ class DiffusionCreator:
             feature_extractor=None,
             safety_checker=None,
             torch_dtype=self.defaultDType,
-            text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot,torch_dtype=self.defaultDType)
+            text_encoder=CLIPTextModel.from_pretrained(
+                "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
         )
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
@@ -116,6 +134,8 @@ class DiffusionCreator:
         else:
             self.randGenerator.manual_seed(seed)
 
+        if 'prompt' in extraArgDict.keys():
+            prompt = extraArgDict['prompt']
         genMetaInfoDict = {
             'seed': seed,
             'prompt': prompt,
@@ -123,6 +143,7 @@ class DiffusionCreator:
         }
 
         argDict = {
+            'prompt': prompt,
             'height': 512,
             'width': 512,
             'num_inference_steps': 50,
@@ -132,8 +153,7 @@ class DiffusionCreator:
         argDict.update(extraArgDict)
         genMetaInfoDict.update(argDict)
 
-        image = self.pipe(prompt,
-                          generator=self.randGenerator,
+        image = self.pipe(generator=self.randGenerator,
                           **argDict
                           ).images[0]
 
@@ -144,4 +164,3 @@ class DiffusionCreator:
     def to(self, device):
         self.pipe.to(device)
         self.randGenerator = torch.Generator(device=device)
-        
