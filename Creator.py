@@ -59,7 +59,8 @@ class PromptGenerator:
 
 class DiffusionCreator:
     def __init__(self, modelWeightRoot='.',
-                 modelDictList=[{'name':'runwayml/stable-diffusion-v1-5','factor':1}],
+                 modelDictList=[
+                     {'name': 'runwayml/stable-diffusion-v1-5', 'factor': 1}],
                  defaultDType=torch.float16,
                  useXformers=False) -> None:
         self.modelWeightRoot = modelWeightRoot
@@ -67,22 +68,24 @@ class DiffusionCreator:
         self.defaultDType = defaultDType
         self.useXformers = useXformers
         self.randGenerator = torch.Generator()
+        self.blendMetaInfoDict = {}
         self.loadModel()
 
     def loadModel(self):
         self.loadMultiModel(self.modelDictList)
         baseModelName = self.modelDictList[0]['name']
         tempUNet = copy.deepcopy(self.modelUNetList[baseModelName])
-        if len(self.modelDictList)>1:
+        if len(self.modelDictList) > 1:
             unetWeight = self.blendModel(self.modelDictList)
             tempUNet.load_state_dict(unetWeight)
-        
+
         if baseModelName[0] == '.':
-            baseModelName = os.path.join(self.modelWeightRoot, baseModelName[1:])
+            baseModelName = os.path.join(
+                self.modelWeightRoot, baseModelName[1:])
 
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
-            unet = tempUNet,
+            unet=tempUNet,
             requires_safety_checker=False,
             feature_extractor=None,
             safety_checker=None,
@@ -93,8 +96,6 @@ class DiffusionCreator:
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
 
-
-
     def loadMultiModel(self, blendParamDictList):
         self.modelUNetList = {}
         for blendParamDict in blendParamDictList:
@@ -103,46 +104,70 @@ class DiffusionCreator:
                 modelName = os.path.join(
                     self.modelWeightRoot, modelNameRaw[1:], 'unet')
                 self.modelUNetList[modelNameRaw] = UNet2DConditionModel.from_pretrained(
-                        modelName,
-                         cache_dir=self.modelWeightRoot,
-                         torch_dtype=self.defaultDType)                
+                    modelName,
+                    cache_dir=self.modelWeightRoot,
+                    torch_dtype=self.defaultDType)
             else:
                 modelName = modelNameRaw
                 pipe = StableDiffusionPipeline.from_pretrained(
-                            modelName, cache_dir=self.modelWeightRoot,
-                            requires_safety_checker=False,
-                            feature_extractor=None,
-                            safety_checker=None,
-                            torch_dtype=self.defaultDType,
-                            text_encoder=None
-                        )    
+                    modelName, cache_dir=self.modelWeightRoot,
+                    requires_safety_checker=False,
+                    feature_extractor=None,
+                    safety_checker=None,
+                    torch_dtype=self.defaultDType,
+                    text_encoder=None
+                )
 
                 self.modelUNetList[modelNameRaw] = pipe.unet
-                del pipe  
-                          
+                del pipe
 
-
-    def blendModel(self, blendParamDictList):
+    def blendModel(self, blendParamDictList, blendMode='weightMix'):
         firstModelParamDict = blendParamDictList[0]
         firstModelName = firstModelParamDict['name']
         firstModelFactor = firstModelParamDict['factor']
+        firstModelWeightKeys = self.modelUNetList[firstModelName].state_dict(
+        ).keys()
 
         tempStateDict = {}
+        blendMetaInfoDict = {
+            'mode': blendMode,
+            'param': None
+        }
 
-        for weightKey, weightTensor in self.modelUNetList[firstModelName].state_dict().items():
-            tempStateDict[weightKey] = weightTensor*firstModelFactor
+        if blendMode == 'randLayer':
+            tempStateChoosenDict = {}
+            for weightKey in firstModelWeightKeys:
+                randomIndex = random.randint(0, len(blendParamDictList)-1)
+                choosenModelParamDict = blendParamDictList[randomIndex]
+                choosenModelName = choosenModelParamDict['name']
+                tempStateDict[weightKey] = self.modelUNetList[choosenModelName].state_dict()[
+                    weightKey]
+                tempStateChoosenDict[weightKey] = randomIndex
+            blendMetaInfoDict['param'] = tempStateChoosenDict
+        elif blendMode == 'weightMix':
+            modelIdx = 0
+            factorDict = {modelIdx: firstModelFactor}
+            for weightKey, weightTensor in self.modelUNetList[firstModelName].state_dict().items():
+                tempStateDict[weightKey] = weightTensor*firstModelFactor
 
-        for modelParamDict in blendParamDictList[1:]:
-            modelName = modelParamDict['name']
-            modelFactor = modelParamDict['factor']
-            for weightKey, weightTensor in tempStateDict.items():
-                tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
-                    weightKey]*modelFactor
+            for modelParamDict in blendParamDictList[1:]:
+                modelName = modelParamDict['name']
+                modelFactor = modelParamDict['factor']
+                modelIdx += 1
+                factorDict[modelIdx] = modelFactor
+                for weightKey, weightTensor in tempStateDict.items():
+                    tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
+                        weightKey]*modelFactor
+
+            blendMetaInfoDict['param'] = factorDict
+
+        self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
-    
-    def blendInRuntime(self,blendParamDictList):
-        self.pipe.unet.load_state_dict(self.blendModel(blendParamDictList))
+
+    def blendInRuntime(self, blendParamDictList, blendMode='weightMix'):
+        self.pipe.unet.load_state_dict(
+            self.blendModel(blendParamDictList, blendMode))
 
     def getExif(self, jsonDict):
         # https://stackoverflow.com/questions/52729428/how-to-write-custom-metadata-into-jpeg-with-python/63400376#63400376
@@ -169,7 +194,8 @@ class DiffusionCreator:
         genMetaInfoDict = {
             'seed': seed,
             'prompt': prompt,
-            'model': self.modelDictList
+            'model': self.modelDictList,
+            'blendMetaInfo': self.blendMetaInfoDict
         }
 
         argDict = {
@@ -212,7 +238,7 @@ class DiffusionCreator:
 #     artistGen = RandomArtistGenerator()
 #     sizeGen = RandomImageSizeGenerator(sizeSet='big')
 #     promptGen = PromptGenerator(
-#         [  
+#         [
 #             'illustration of beautiful huge dahlia garden'
 #         ],
 #         negativePrompt=None,#'closed eyes,slanted eyes,ugly,Polydactyly,handicapped,extra fingers,fused fingers,poorly drawn hands,extra legs,one leg,woman underwear,low quality,low res,blurry,draft,text,watermark,signature,two heads,mutated hands,mutation,deformed, bad anatomy, bad proportions,too many fingers,morbid, mutilated, extra limbs,disfigured,missing arms,missing legs,extra arms,malformed limbs',
