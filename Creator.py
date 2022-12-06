@@ -26,6 +26,7 @@ class RandomArtistGenerator:
 class RandomImageSizeGenerator:
     def __init__(self, sizeSet='big', customSizeList=None) -> None:
         self.sizeListDict = {
+            'huge': [(1024, 1024), (1280, 768), (1280, 640), (1280, 832)],
             'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896), (1088, 512)],
             'small': [(768, 768), (512, 512), (768, 640), (768, 512)]
         }
