@@ -87,7 +87,6 @@ class DiffusionCreator:
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             unet=tempUNet,
-            requires_safety_checker=False,
             feature_extractor=None,
             safety_checker=None,
             torch_dtype=self.defaultDType,
@@ -104,23 +103,16 @@ class DiffusionCreator:
             if modelNameRaw[0] == '.':
                 modelName = os.path.join(
                     self.modelWeightRoot, modelNameRaw[1:], 'unet')
-                self.modelUNetList[modelNameRaw] = UNet2DConditionModel.from_pretrained(
-                    modelName,
-                    cache_dir=self.modelWeightRoot,
-                    torch_dtype=self.defaultDType)
             else:
                 modelName = modelNameRaw
-                pipe = StableDiffusionPipeline.from_pretrained(
-                    modelName, cache_dir=self.modelWeightRoot,
-                    requires_safety_checker=False,
-                    feature_extractor=None,
-                    safety_checker=None,
-                    torch_dtype=self.defaultDType,
-                    text_encoder=None
-                )
 
-                self.modelUNetList[modelNameRaw] = pipe.unet
-                del pipe
+            unet = UNet2DConditionModel.from_pretrained(
+                modelName,
+                 subfolder='unet', 
+                 cache_dir=self.modelWeightRoot, 
+                 torch_dtype=self.defaultDType)
+
+            self.modelUNetList[modelNameRaw] = unet
 
     def blendModel(self, blendParamDictList, blendMode='weightMix'):
         firstModelParamDict = blendParamDictList[0]
