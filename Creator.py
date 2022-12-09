@@ -49,12 +49,20 @@ class PromptGenerator:
         self.negativePrompt = negativePrompt
 
     def getPrompt(self):
-        prompt = random.choice(self.promptList)
+        rawPrompt = random.choice(self.promptList)
+        if isinstance(rawPrompt, (tuple, list)):
+            prompt = rawPrompt[0]
+            additionalNegPrompt = rawPrompt[1]+','
+        elif isinstance(rawPrompt, str):
+            prompt = rawPrompt
+            additionalNegPrompt = ''
+        else:
+            raise RuntimeError('Wrong Prompt type')
         if self.artistGenerator:
             prompt = prompt+',by artist '+self.artistGenerator.getArtist()
         return {
             'prompt': prompt,
-            'negative_prompt': self.negativePrompt
+            'negative_prompt': additionalNegPrompt + self.negativePrompt
         }
 
 
@@ -83,17 +91,17 @@ class DiffusionCreator:
         if baseModelName[0] == '.':
             baseModelName = os.path.join(
                 self.modelWeightRoot, baseModelName[1:])
-            
+
         self.scheduler = DDIMScheduler(**{"beta_end": 0.012,
-                                                        "beta_schedule": "scaled_linear",
-                                                        "beta_start": 0.00085})
-        
+                                          "beta_schedule": "scaled_linear",
+                                          "beta_start": 0.00085})
+
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             unet=tempUNet,
             feature_extractor=None,
             safety_checker=None,
-            scheduler = self.scheduler,
+            scheduler=self.scheduler,
             torch_dtype=self.defaultDType,
             text_encoder=CLIPTextModel.from_pretrained(
                 "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
@@ -113,9 +121,9 @@ class DiffusionCreator:
 
             unet = UNet2DConditionModel.from_pretrained(
                 modelName,
-                 subfolder='unet', 
-                 cache_dir=self.modelWeightRoot, 
-                 torch_dtype=self.defaultDType)
+                subfolder='unet',
+                cache_dir=self.modelWeightRoot,
+                torch_dtype=self.defaultDType)
 
             self.modelUNetList[modelNameRaw] = unet
 
