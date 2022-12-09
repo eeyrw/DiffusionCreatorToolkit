@@ -83,12 +83,17 @@ class DiffusionCreator:
         if baseModelName[0] == '.':
             baseModelName = os.path.join(
                 self.modelWeightRoot, baseModelName[1:])
-
+            
+        self.scheduler = DDIMScheduler(**{"beta_end": 0.012,
+                                                        "beta_schedule": "scaled_linear",
+                                                        "beta_start": 0.00085})
+        
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             unet=tempUNet,
             feature_extractor=None,
             safety_checker=None,
+            scheduler = self.scheduler,
             torch_dtype=self.defaultDType,
             text_encoder=CLIPTextModel.from_pretrained(
                 "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
