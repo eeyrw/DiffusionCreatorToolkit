@@ -129,5 +129,5 @@ dmypy.json
 .pyre/
 
 diffusers_venv/
-imgs/
+imgs*/
 MyGenerator.py

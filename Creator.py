@@ -12,15 +12,22 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 
 class RandomArtistGenerator:
-    def __init__(self, artistDatabase='assets/artists.csv') -> None:
+    def __init__(self, artistDatabase='assets/artists.csv', specifiedArtist=None, specifiedArtistList=None) -> None:
         with open(artistDatabase, newline='', encoding='utf8') as csvfile:
             reader = csv.DictReader(csvfile)
             artistDictList = list(reader)
             self.artistDictList = [artistDict for artistDict in artistDictList if float(
-                artistDict['score']) > 0.7]
+                artistDict['score']) > 0.1]
+        self.specifiedArtist = specifiedArtist
+        self.specifiedArtistList = specifiedArtistList
 
     def getArtist(self):
-        return random.choice(self.artistDictList)['artist']
+        if self.specifiedArtist:
+            return self.specifiedArtist
+        elif self.specifiedArtistList:
+            return random.choice(self.specifiedArtistList)
+        else:
+            return random.choice(self.artistDictList)['artist']
 
 
 class RandomImageSizeGenerator:
@@ -58,9 +65,11 @@ class PromptGenerator:
             additionalNegPrompt = ''
         else:
             raise RuntimeError('Wrong Prompt type')
+        rawPrompt = prompt
         if self.artistGenerator:
             prompt = prompt+',by artist '+self.artistGenerator.getArtist()
         return {
+            'originalPrompt': rawPrompt,
             'prompt': prompt,
             'negative_prompt': additionalNegPrompt + self.negativePrompt
         }
@@ -185,10 +194,7 @@ class DiffusionCreator:
         exif_dat = piexif.dump(exif_dict)
         return exif_dat
 
-    def generate(self, prompt, outputDir='./imgs', seed=None, extraArgDict={}):
-        if not os.path.exists(outputDir):
-            os.mkdir(outputDir)
-
+    def generate(self, prompt, outputDir='./imgs', seed=None, usePromptAsSubDir=False, extraArgDict={}):
         if seed is None:
             seed = self.randGenerator.seed()
             self.randGenerator.manual_seed(seed)
@@ -214,6 +220,16 @@ class DiffusionCreator:
 
         argDict.update(extraArgDict)
         genMetaInfoDict.update(argDict)
+
+        if usePromptAsSubDir:
+            if 'originalPrompt' in argDict.keys():
+                prompt = argDict['originalPrompt']
+            else:
+                prompt = argDict['prompt']
+            outputDir = os.path.join(
+                outputDir, os.path.normpath(prompt))
+        if not os.path.exists(outputDir):
+            os.makedirs(outputDir)
 
         image = self.pipe(generator=self.randGenerator,
                           **argDict
