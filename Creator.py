@@ -9,6 +9,7 @@ import json
 import piexif
 import copy
 torch.backends.cuda.matmul.allow_tf32 = True
+from PIL import Image
 
 
 class RandomArtistGenerator:
@@ -35,7 +36,8 @@ class RandomImageSizeGenerator:
         self.sizeListDict = {
             'huge': [(1024, 1024), (1280, 768), (1280, 640), (1280, 832)],
             'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896), (1088, 512)],
-            'small': [(768, 768), (512, 512), (768, 640), (768, 512)]
+            'small': [(768, 768), (512, 512), (768, 640), (768, 512)],
+            'square': [(768, 768), (832, 832), (1024, 1024)],
         }
         if customSizeList:
             self.sizeList = customSizeList
@@ -56,6 +58,8 @@ class PromptGenerator:
         self.negativePrompt = negativePrompt
 
     def getPrompt(self):
+        returnDict = {}
+        additionalNegPrompt = ''
         rawPrompt = random.choice(self.promptList)
         if isinstance(rawPrompt, (tuple, list)):
             prompt = rawPrompt[0]
@@ -63,16 +67,25 @@ class PromptGenerator:
         elif isinstance(rawPrompt, str):
             prompt = rawPrompt
             additionalNegPrompt = ''
+        elif isinstance(rawPrompt, dict):
+            print(rawPrompt)
+            prompt = rawPrompt['prompt']
+            if 'additionalNegPrompt' in rawPrompt.keys():
+                additionalNegPrompt = rawPrompt['additionalNegPrompt']
+            if 'refImage' in rawPrompt.keys():
+                rawPrompt['init_image'] = Image.open(rawPrompt['refImage'])
+            returnDict.update(rawPrompt)
         else:
             raise RuntimeError('Wrong Prompt type')
         rawPrompt = prompt
         if self.artistGenerator:
             prompt = prompt+',by artist '+self.artistGenerator.getArtist()
-        return {
+        returnDict.update({
             'originalPrompt': rawPrompt,
             'prompt': prompt,
             'negative_prompt': additionalNegPrompt + self.negativePrompt
-        }
+        })
+        return returnDict
 
 
 class DiffusionCreator:
@@ -235,7 +248,10 @@ class DiffusionCreator:
                           **argDict
                           ).images[0]
 
-        exif_dat = self.getExif(genMetaInfoDict)
+        exifGenMetaInfoDict = genMetaInfoDict
+        if 'init_image' in exifGenMetaInfoDict.keys():
+            del exifGenMetaInfoDict['init_image']
+        exif_dat = self.getExif(exifGenMetaInfoDict)
         image.save(os.path.join(outputDir, '%d.jpg' %
                    seed), quality=90, exif=exif_dat)
 
