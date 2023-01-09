@@ -30,10 +30,12 @@ class RandomArtistGenerator:
             artistDictList = list(reader)
             if useSpecifiedStyle:
                 self.artistDictList = [artistDict for artistDict in artistDictList if float(
-                    artistDict['score']) > 0.5 and artistDict['category'] in specifiedStyleList]
+                    artistDict['score']) > 0.6 and artistDict['category'] in specifiedStyleList]
+                print('Total Artist Num: %d' % len(self.artistDictList))
             else:
                 self.artistDictList = [artistDict for artistDict in artistDictList if float(
-                    artistDict['score']) > 0.5]                
+                    artistDict['score']) > 0.6]
+
         self.specifiedArtist = specifiedArtist
         self.specifiedArtistList = specifiedArtistList
 
@@ -243,7 +245,8 @@ class DiffusionCreator:
             'height': 512,
             'width': 512,
             'num_inference_steps': 50,
-            'guidance_scale': 7.5
+            'guidance_scale': 7.5,
+            'max_embeddings_multiples': 3,
         }
 
         argDict.update(extraArgDict)
