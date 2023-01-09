@@ -1,3 +1,4 @@
+from PIL import Image
 from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 import csv
 import random
@@ -9,16 +10,30 @@ import json
 import piexif
 import copy
 torch.backends.cuda.matmul.allow_tf32 = True
-from PIL import Image
 
 
 class RandomArtistGenerator:
-    def __init__(self, artistDatabase='assets/artists.csv', specifiedArtist=None, specifiedArtistList=None) -> None:
+    def __init__(self, artistDatabase='assets/artists.csv',
+                 specifiedArtist=None,
+                 specifiedArtistList=None,
+                 specifiedStyle=None,
+                 specifiedStyleList=None) -> None:
+        useSpecifiedStyle = False
+        if specifiedStyle is not None:
+            specifiedStyleList = (specifiedStyle,)
+            useSpecifiedStyle = True
+        if specifiedStyleList is not None:
+            useSpecifiedStyle = True
+
         with open(artistDatabase, newline='', encoding='utf8') as csvfile:
             reader = csv.DictReader(csvfile)
             artistDictList = list(reader)
-            self.artistDictList = [artistDict for artistDict in artistDictList if float(
-                artistDict['score']) > 0.1]
+            if useSpecifiedStyle:
+                self.artistDictList = [artistDict for artistDict in artistDictList if float(
+                    artistDict['score']) > 0.5 and artistDict['category'] in specifiedStyleList]
+            else:
+                self.artistDictList = [artistDict for artistDict in artistDictList if float(
+                    artistDict['score']) > 0.5]                
         self.specifiedArtist = specifiedArtist
         self.specifiedArtistList = specifiedArtistList
 
