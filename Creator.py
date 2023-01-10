@@ -110,11 +110,15 @@ class DiffusionCreator:
                  modelDictList=[
                      {'name': 'runwayml/stable-diffusion-v1-5', 'factor': 1}],
                  defaultDType=torch.float16,
-                 useXformers=False) -> None:
+                 useXformers=False,
+                 useCLIP336=False,
+                 useDDIM=False) -> None:
         self.modelWeightRoot = modelWeightRoot
         self.modelDictList = modelDictList
         self.defaultDType = defaultDType
         self.useXformers = useXformers
+        self.useCLIP336 = useCLIP336
+        self.useDDIM = useDDIM
         self.randGenerator = torch.Generator()
         self.blendMetaInfoDict = {}
         self.loadModel()
@@ -131,19 +135,24 @@ class DiffusionCreator:
             baseModelName = os.path.join(
                 self.modelWeightRoot, baseModelName[1:])
 
-        self.scheduler = DDIMScheduler(**{"beta_end": 0.012,
-                                          "beta_schedule": "scaled_linear",
-                                          "beta_start": 0.00085})
+        pipeArgDict = {}
+
+        if self.useCLIP336:
+            pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
+                "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+        if self.useDDIM:
+            self.scheduler = DDIMScheduler(**{"beta_end": 0.012,
+                                              "beta_schedule": "scaled_linear",
+                                              "beta_start": 0.00085})
+            pipeArgDict['scheduler'] = self.scheduler
 
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             unet=tempUNet,
             feature_extractor=None,
             safety_checker=None,
-            scheduler=self.scheduler,
             torch_dtype=self.defaultDType,
-            text_encoder=CLIPTextModel.from_pretrained(
-                "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+            **pipeArgDict
         )
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
@@ -259,6 +268,10 @@ class DiffusionCreator:
                 prompt = argDict['prompt']
             outputDir = os.path.join(
                 outputDir, os.path.normpath(prompt))
+
+        if 'originalPrompt' in argDict.keys():
+            del argDict['originalPrompt']
+        
         if not os.path.exists(outputDir):
             os.makedirs(outputDir)
 
