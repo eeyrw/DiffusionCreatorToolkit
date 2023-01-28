@@ -101,7 +101,15 @@ class DiffusionModelWeightCompressor:
         modelWeight = modelWeight.to(torch.float32)
         hist, histBinEdges = torch.histogram(
             modelWeight, totalBins, range=(0, max(modelWeight)))
-        for i in range(quantSteps, totalBins):
+        cumHist = torch.cumsum(hist,0)
+        cumHist = cumHist/cumHist[-1]
+        startBins = quantSteps
+        for i, v in enumerate(cumHist):
+            if v>=0.7:
+                startBins = i
+                break
+                
+        for i in range(startBins, totalBins):
             reference_distribution_P = torch.clone(hist[:i])
             reference_distribution_P_RAW = hist[:i]
             outliers_count = sum(hist[i:])
@@ -136,7 +144,7 @@ class DiffusionModelWeightCompressor:
             if diver < minimalDv:
                 minimalDv = diver
                 minimalDvI = i
-
+        print('Per:%d,mDV:%d'%(startBins,minimalDvI))
         return histBinEdges[minimalDvI]
         # print('Mdv:%f,MdvI:%d,ClipPoint:%f' % (minimalDv, minimalDvI,histBinEdges[minimalDvI]))
 
