@@ -73,6 +73,11 @@ class DiffusionModelWeightCompressor:
         save_file(targetDict, 'NormAndBiasWeightOnly.safetensors')
         save_file(targetDict2, 'ExNormAndBiasWeightOnly.safetensors')
 
+    def to4bit(self,modelWeightDict,metaDict):
+        for k, v in modelWeightDict.items():
+            if metaDict[k]['needCompress']:
+                pass
+
     def estimateQuantRange(self, modelWeight):
         # https://on-demand.gputechconf.com/gtc/2017/presentation/s7310-8-bit-inference-with-tensorrt.pdf
         # Input: FP32 histogram H with 2048 bins: bin[ 0 ], …, bin[ 2047 ]
