@@ -53,7 +53,7 @@ class ModelMatrixComparator:
             'height': randomSize[0],
             'width': randomSize[1],
             'num_inference_steps': 50,
-            'guidance_scale': 12
+            'guidance_scale': 8
         }
         prompt = self.promptGen.getPrompt()
         print('Prompt: ', prompt['prompt'])
