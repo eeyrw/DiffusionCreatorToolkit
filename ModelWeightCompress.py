@@ -89,10 +89,11 @@ class DiffusionModelWeightCompressor:
         # Find index ‘m’ for which divergence[ m ] is minimal
         # threshold = ( m + 0.5 ) * ( width of a bin )
 
-        quantSteps = 16
+        quantSteps = 8
         totalBins = 1024
         minimalDv = 10
         minimalDvI = 0
+        modelWeight = modelWeight.to(torch.float32)
         hist, histBinEdges = torch.histogram(
             modelWeight, totalBins, range=(0, max(modelWeight)))
         for i in range(quantSteps, totalBins):
@@ -125,17 +126,17 @@ class DiffusionModelWeightCompressor:
 
             diver = entropy(reference_distribution_P_RAW_norm.numpy(),
                             candi_Q_exp_norm.numpy())
-            print('%d: %f' % (i, diver))
+            # print('%d: %f' % (i, diver))
             if diver < minimalDv:
                 minimalDv = diver
                 minimalDvI = i
 
-        return histBinEdges[minimalDvI], hist, candi_Q_exp
+        return histBinEdges[minimalDvI]
         # print('Mdv:%f,MdvI:%d,ClipPoint:%f' % (minimalDv, minimalDvI,histBinEdges[minimalDvI]))
 
     def visualModelWeight(self, modelWeightDict):
         # ax.set_title('PDF of %s' % outputJson)
-        subSize = 100
+        subSize = 2
         keyList = list(modelWeightDict.keys())
         modelWeightDictKeySubList = [keyList[x:x+subSize]
                                      for x in range(0, len(keyList), subSize)]
@@ -144,12 +145,15 @@ class DiffusionModelWeightCompressor:
             chartNum = len(modelWeightDictKeys)
             fig = plt.figure(figsize=(8, chartNum*4))
             for j, weightKey in enumerate(modelWeightDictKeys):
+                edge = self.estimateQuantRange(torch.flatten(modelWeightDict[weightKey]))
                 ax = fig.add_subplot(chartNum, 1, j+1)
                 weights = torch.flatten(modelWeightDict[weightKey]).numpy()
                 ns, edgeBin, patches = ax.hist(
                     weights, bins=200, label='%s-%d' % (weightKey, len(weights)))
+                ax.vlines(edge,0,max(ns),colors='red',label='Edge:%f'%edge)
                 ax.legend(prop={'size': 10})
             plt.savefig("mygraph_%d.png" % i)
+            plt.close(fig)
 
     def to(self, device):
         self.pipe.to(device)
@@ -167,6 +171,6 @@ if __name__ == "__main__":
                                              defaultDType=torch.float16,
                                              )
     diffWeight = creator.diffModelWeight()
-    # creator.visualModelWeight(diffWeight)
+    creator.visualModelWeight(diffWeight)
     # creator.saveNormAndBiasWeightOnly(diffWeight)
-    creator.estimateQuantRange(torch.normal(0, 3, size=(4096,)))
+    # creator.estimateQuantRange(torch.normal(0, 3, size=(4096,)))
