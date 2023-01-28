@@ -145,12 +145,16 @@ class DiffusionModelWeightCompressor:
             chartNum = len(modelWeightDictKeys)
             fig = plt.figure(figsize=(8, chartNum*4))
             for j, weightKey in enumerate(modelWeightDictKeys):
-                edge = self.estimateQuantRange(torch.flatten(modelWeightDict[weightKey]))
+                if not ('.bias' in weightKey or '.norm' in weightKey):
+                    edge = self.estimateQuantRange(
+                        torch.flatten(modelWeightDict[weightKey]))
                 ax = fig.add_subplot(chartNum, 1, j+1)
                 weights = torch.flatten(modelWeightDict[weightKey]).numpy()
                 ns, edgeBin, patches = ax.hist(
                     weights, bins=200, label='%s-%d' % (weightKey, len(weights)))
-                ax.vlines(edge,0,max(ns),colors='red',label='Edge:%f'%edge)
+                if not ('.bias' in weightKey or '.norm' in weightKey):
+                    ax.vlines(edge, 0, max(ns), colors='red',
+                              label='Edge:%f' % edge)
                 ax.legend(prop={'size': 10})
             plt.savefig("mygraph_%d.png" % i)
             plt.close(fig)
