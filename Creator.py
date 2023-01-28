@@ -10,9 +10,6 @@ import copy
 torch.backends.cuda.matmul.allow_tf32 = True
 
 
-
-
-
 class DiffusionCreator:
     def __init__(self, modelWeightRoot='.',
                  modelDictList=[
@@ -21,7 +18,7 @@ class DiffusionCreator:
                  useXformers=False,
                  useCLIP336=False,
                  useDDIM=False,
-                 loadMode = 'blend') -> None:
+                 loadMode='blend') -> None:
         self.modelWeightRoot = modelWeightRoot
         self.modelDictList = modelDictList
         self.defaultDType = defaultDType
@@ -142,7 +139,11 @@ class DiffusionCreator:
         exif_dat = piexif.dump(exif_dict)
         return exif_dat
 
-    def generate(self, prompt, outputDir='./imgs', seed=None, usePromptAsSubDir=False, extraArgDict={}):
+    def generate(self, prompt,
+                 outputDir='./imgs',
+                 seed=None, usePromptAsSubDir=False,
+                 returnPILImage=False,
+                 extraArgDict={}):
         if seed is None:
             seed = self.randGenerator.seed()
             self.randGenerator.manual_seed(seed)
@@ -170,19 +171,20 @@ class DiffusionCreator:
         argDict.update(extraArgDict)
         genMetaInfoDict.update(argDict)
 
-        if usePromptAsSubDir:
-            if 'originalPrompt' in argDict.keys():
-                prompt = argDict['originalPrompt']
-            else:
-                prompt = argDict['prompt']
-            outputDir = os.path.join(
-                outputDir, os.path.normpath(prompt))
+        if not returnPILImage:
+            if usePromptAsSubDir:
+                if 'originalPrompt' in argDict.keys():
+                    prompt = argDict['originalPrompt']
+                else:
+                    prompt = argDict['prompt']
+                outputDir = os.path.join(
+                    outputDir, os.path.normpath(prompt))
+
+            if not os.path.exists(outputDir):
+                os.makedirs(outputDir)
 
         if 'originalPrompt' in argDict.keys():
             del argDict['originalPrompt']
-        
-        if not os.path.exists(outputDir):
-            os.makedirs(outputDir)
 
         image = self.pipe(generator=self.randGenerator,
                           **argDict
@@ -191,9 +193,13 @@ class DiffusionCreator:
         exifGenMetaInfoDict = genMetaInfoDict
         if 'init_image' in exifGenMetaInfoDict.keys():
             del exifGenMetaInfoDict['init_image']
-        exif_dat = self.getExif(exifGenMetaInfoDict)
-        image.save(os.path.join(outputDir, '%d.jpg' %
-                   seed), quality=90, exif=exif_dat)
+
+        if returnPILImage:
+            return image
+        else:
+            exif_dat = self.getExif(exifGenMetaInfoDict)
+            image.save(os.path.join(outputDir, '%d.jpg' %
+                    seed), quality=90, exif=exif_dat)
 
     def to(self, device):
         self.pipe.to(device)

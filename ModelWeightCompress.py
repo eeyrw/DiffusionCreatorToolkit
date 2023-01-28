@@ -134,8 +134,10 @@ class DiffusionModelWeightCompressor:
         return histBinEdges[minimalDvI]
         # print('Mdv:%f,MdvI:%d,ClipPoint:%f' % (minimalDv, minimalDvI,histBinEdges[minimalDvI]))
 
-    def visualModelWeight(self, modelWeightDict):
+    def visualModelWeight(self, modelWeightDict, outputDir='./WeightHist'):
         # ax.set_title('PDF of %s' % outputJson)
+        if not os.path.exists(outputDir):
+            os.makedirs(outputDir)
         subSize = 2
         keyList = list(modelWeightDict.keys())
         modelWeightDictKeySubList = [keyList[x:x+subSize]
@@ -156,7 +158,7 @@ class DiffusionModelWeightCompressor:
                     ax.vlines(edge, 0, max(ns), colors='red',
                               label='Edge:%f' % edge)
                 ax.legend(prop={'size': 10})
-            plt.savefig("mygraph_%d.png" % i)
+            plt.savefig(os.path.join(outputDir, "Hist_%d.webp" % i))
             plt.close(fig)
 
     def to(self, device):
