@@ -111,14 +111,15 @@ class DiffusionModelWeightCompressor:
             candi_Q_exp = torch.zeros_like(reference_distribution_P)
             for sta, end in zip(rangeStartIndices, rangeEndIndices):
                 selected = reference_distribution_P[sta:end]
-                selectedNonZero = (selected != 0).int()
-                num_nonzero = torch.count_nonzero(selectedNonZero)
-                if num_nonzero > 0:
-                    candi_Q_exp[sta:end] = sum(
-                        selected)/num_nonzero
-                    candi_Q_exp[sta:end] = candi_Q_exp[sta:end]*selectedNonZero
-                else:
-                    candi_Q_exp[sta:end] = 0
+                # selectedNonZero = (selected != 0).int()
+                # num_nonzero = torch.count_nonzero(selectedNonZero)
+                # if num_nonzero > 0:
+                #     candi_Q_exp[sta:end] = sum(
+                #         selected)/num_nonzero
+                #     candi_Q_exp[sta:end] = candi_Q_exp[sta:end]*selectedNonZero
+                # else:
+                #     candi_Q_exp[sta:end] = 0
+                candi_Q_exp[sta:end] = sum(selected)/(end-sta)
 
             candi_Q_exp_norm = candi_Q_exp/sum(candi_Q_exp)
             reference_distribution_P_RAW_norm = reference_distribution_P_RAW / \
