@@ -1,4 +1,3 @@
-from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 import random
 import torch
 import os
@@ -8,6 +7,7 @@ import json
 import piexif
 import copy
 torch.backends.cuda.matmul.allow_tf32 = True
+from transformers import CLIPTextModel, CLIPTokenizer, GPTNeoModel, GPT2Tokenizer, AutoTokenizer, T5Tokenizer, T5EncoderModel
 
 
 class DiffusionCreator:
@@ -17,6 +17,7 @@ class DiffusionCreator:
                  defaultDType=torch.float16,
                  useXformers=False,
                  useCLIP336=False,
+                 useT5=False,
                  useDDIM=False,
                  loadMode='blend') -> None:
         self.modelWeightRoot = modelWeightRoot
@@ -24,6 +25,7 @@ class DiffusionCreator:
         self.defaultDType = defaultDType
         self.useXformers = useXformers
         self.useCLIP336 = useCLIP336
+        self.useT5 = useT5
         self.useDDIM = useDDIM
         self.randGenerator = torch.Generator()
         self.blendMetaInfoDict = {}
@@ -42,6 +44,15 @@ class DiffusionCreator:
                 self.modelWeightRoot, baseModelName[1:])
 
         pipeArgDict = {}
+
+        if self.useT5:
+            from lpw_stable_diffusion_t5 import StableDiffusionLongPromptWeightingPipeline
+            pipeArgDict['text_encoder'] =  T5EncoderModel.from_pretrained("google/t5-v1_1-large",
+            cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+            pipeArgDict['tokenizer'] = T5Tokenizer.from_pretrained("google/t5-v1_1-large",
+            cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+        else:
+            from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 
         if self.useCLIP336:
             pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
