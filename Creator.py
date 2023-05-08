@@ -7,62 +7,62 @@ import json
 import piexif
 import copy
 torch.backends.cuda.matmul.allow_tf32 = True
-from transformers import CLIPTextModel, CLIPTokenizer, GPTNeoModel, GPT2Tokenizer, AutoTokenizer, T5Tokenizer, T5EncoderModel
+from transformers import CLIPTextModel, CLIPTokenizer
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import UniPCMultistepScheduler
+import diffusers
 
-
+# {
+#     'vae': '.ARTMAN_HUGE_144000',
+#     'textEncoder':'.ARTMAN_HUGE_144000',
+#     'models':[{'name':'.ARTMAN_HUGE_144000','factor':0.5},]
+#     }
 class DiffusionCreator:
     def __init__(self, modelWeightRoot='.',
-                 modelDictList=[
+                 modelCfgDict=[
                      {'name': 'runwayml/stable-diffusion-v1-5', 'factor': 1}],
                  defaultDType=torch.float16,
                  useXformers=False,
-                 useCLIP336=False,
-                 useT5=False,
-                 useDDIM=False,
                  loadMode='blend') -> None:
         self.modelWeightRoot = modelWeightRoot
-        self.modelDictList = modelDictList
+        self.modelCfgDict = modelCfgDict
         self.defaultDType = defaultDType
         self.useXformers = useXformers
-        self.useCLIP336 = useCLIP336
-        self.useT5 = useT5
-        self.useDDIM = useDDIM
         self.randGenerator = torch.Generator()
         self.blendMetaInfoDict = {}
         self.loadModel()
 
+    def parseModelPath(self,modelPath,modelWeightRoot):
+        if modelPath[0] == '.':
+            modelPath = os.path.join(
+                modelWeightRoot, modelPath[1:])   
+        return modelPath
+         
     def loadModel(self):
-        self.loadMultiModel(self.modelDictList)
-        baseModelName = self.modelDictList[0]['name']
+        self.loadMultiModel(self.modelCfgDict['models'])
+        baseModelName = self.modelCfgDict['models'][0]['name']
         tempUNet = copy.deepcopy(self.modelUNetList[baseModelName])
-        if len(self.modelDictList) > 1:
-            unetWeight = self.blendModel(self.modelDictList)
+        if len(self.modelCfgDict['models']) > 1:
+            unetWeight = self.blendModel(self.modelCfgDict['models'])
             tempUNet.load_state_dict(unetWeight)
 
-        if baseModelName[0] == '.':
-            baseModelName = os.path.join(
-                self.modelWeightRoot, baseModelName[1:])
+        baseModelName = self.parseModelPath(baseModelName,self.modelWeightRoot)
 
         pipeArgDict = {}
 
-        if self.useT5:
-            from lpw_stable_diffusion_t5 import StableDiffusionLongPromptWeightingPipeline
-            pipeArgDict['text_encoder'] =  T5EncoderModel.from_pretrained("google/t5-v1_1-large",
-            cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
-            pipeArgDict['tokenizer'] = T5Tokenizer.from_pretrained("google/t5-v1_1-large",
-            cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
-        else:
-            from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
+        from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 
-        if self.useCLIP336:
-            pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
-                "openai/clip-vit-large-patch14-336", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
-        if self.useDDIM:
-            self.scheduler = DDIMScheduler(**{"beta_end": 0.012,
-                                              "beta_schedule": "scaled_linear",
-                                              "beta_start": 0.00085})
-            pipeArgDict['scheduler'] = self.scheduler
+        if 'vae' in self.modelCfgDict.keys():
+            vaePath = self.parseModelPath(self.modelCfgDict['vae'],self.modelWeightRoot)
+            pipeArgDict['vae'] = AutoencoderKL.from_pretrained(vaePath,subfolder = 'vae', cache_dir = self.modelWeightRoot)
 
+        if 'textEncoder' in self.modelCfgDict.keys():
+            textEncoderPath = self.parseModelPath(self.modelCfgDict['textEncoder'],self.modelWeightRoot)
+            pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(textEncoderPath,subfolder = 'text_encoder', cache_dir = self.modelWeightRoot)
+            pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(textEncoderPath,subfolder = 'tokenizer', cache_dir = self.modelWeightRoot)
+
+
+            
         self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             unet=tempUNet,
@@ -71,6 +71,11 @@ class DiffusionCreator:
             torch_dtype=self.defaultDType,
             **pipeArgDict
         )
+
+        if 'scheduler' in self.modelCfgDict.keys():
+            scheduer = getattr(diffusers,self.modelCfgDict['scheduler'])
+            self.pipe.scheduler = scheduer.from_config(self.pipe.scheduler.config)
+        
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
 
@@ -166,7 +171,7 @@ class DiffusionCreator:
         genMetaInfoDict = {
             'seed': seed,
             'prompt': prompt,
-            'model': self.modelDictList,
+            'model': self.modelCfgDict,
             'blendMetaInfo': self.blendMetaInfoDict
         }
 
@@ -202,8 +207,8 @@ class DiffusionCreator:
                           ).images[0]
 
         exifGenMetaInfoDict = genMetaInfoDict
-        if 'init_image' in exifGenMetaInfoDict.keys():
-            del exifGenMetaInfoDict['init_image']
+        if 'image' in exifGenMetaInfoDict.keys():
+            del exifGenMetaInfoDict['image']
 
         if returnPILImage:
             return image
@@ -222,10 +227,10 @@ class DiffusionCreator:
 # import torch
 
 # if __name__ == "__main__":
-#     modelDictList = ({'name': 'runwayml/stable-diffusion-v1-5', 'factor': 0.4},
+#     modelCfgDict = ({'name': 'runwayml/stable-diffusion-v1-5', 'factor': 0.4},
 #                           {'name': 'Linaqruf/anything-v3.0', 'factor': 0.6})
 #     creator = DiffusionCreator(modelWeightRoot=r'../StableDiffusionWeight',
-#                                modelDictList=modelDictList,  # To use local weight you should start with "."
+#                                modelCfgDict=modelCfgDict,  # To use local weight you should start with "."
 #                                defaultDType=torch.float16,
 #                                useXformers=True)
 
