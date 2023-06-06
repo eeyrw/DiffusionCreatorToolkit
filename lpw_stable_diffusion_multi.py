@@ -3,17 +3,17 @@ import re
 from typing import Callable, List, Optional, Union
 
 import numpy as np
+import PIL
+import PIL
 import torch
+from packaging import version
+from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 
 import diffusers
-import PIL
 from diffusers import SchedulerMixin, StableDiffusionPipeline
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput, StableDiffusionSafetyChecker
-from diffusers.utils import deprecate, logging
-from packaging import version
-from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
-from transformers import CLIPTextModel, CLIPTokenizer, GPTNeoModel, GPT2Tokenizer, AutoTokenizer, T5Tokenizer, T5EncoderModel
+from diffusers.utils import logging
 
 
 try:
@@ -159,7 +159,7 @@ def get_prompts_with_weights(pipe: StableDiffusionPipeline, prompt: List[str], m
         text_weight = []
         for word, weight in texts_and_weights:
             # tokenize and discard the starting and the ending token
-            token = pipe.tokenizer(word).input_ids
+            token = pipe.tokenizer(word).input_ids[1:-1]
             text_token += token
             # copy the weight by length of token
             text_weight += [weight] * len(token)
@@ -179,26 +179,68 @@ def get_prompts_with_weights(pipe: StableDiffusionPipeline, prompt: List[str], m
     return tokens, weights
 
 
-def pad_tokens_and_weights(tokens, weights, eos, max_length):
+def pad_tokens_and_weights(tokens, weights, max_length, bos, eos, pad, no_boseos_middle=True, chunk_length=77):
     r"""
     Pad the tokens (with starting and ending tokens) and weights (with 1.0) to max_length.
     """
+    max_embeddings_multiples = (max_length - 2) // (chunk_length - 2)
+    weights_length = max_length if no_boseos_middle else max_embeddings_multiples * chunk_length
     for i in range(len(tokens)):
-        tokens[i] = tokens[i] +[eos] * (max_length - len(tokens[i]))
-        weights[i] = weights[i] + [1.0] * (max_length - len(weights[i]))
+        tokens[i] = [bos] + tokens[i] + [pad] * (max_length - 1 - len(tokens[i]) - 1) + [eos]
+        if no_boseos_middle:
+            weights[i] = [1.0] + weights[i] + [1.0] * (max_length - 1 - len(weights[i]))
+        else:
+            w = []
+            if len(weights[i]) == 0:
+                w = [1.0] * weights_length
+            else:
+                for j in range(max_embeddings_multiples):
+                    w.append(1.0)  # weight for starting token in this chunk
+                    w += weights[i][j * (chunk_length - 2) : min(len(weights[i]), (j + 1) * (chunk_length - 2))]
+                    w.append(1.0)  # weight for ending token in this chunk
+                w += [1.0] * (weights_length - len(w))
+            weights[i] = w[:]
+
     return tokens, weights
 
 
 def get_unweighted_text_embeddings(
     pipe: StableDiffusionPipeline,
     text_input: torch.Tensor,
+    chunk_length: int,
+    no_boseos_middle: Optional[bool] = True,
 ):
     """
     When the length of tokens is a multiple of the capacity of the text encoder,
     it should be split into chunks and sent to the text encoder individually.
     """
-    text_embeddings = pipe.text_encoder(text_input)
-    text_embeddings = text_embeddings.last_hidden_state
+    max_embeddings_multiples = (text_input.shape[1] - 2) // (chunk_length - 2)
+    if max_embeddings_multiples > 1:
+        text_embeddings = []
+        for i in range(max_embeddings_multiples):
+            # extract the i-th chunk
+            text_input_chunk = text_input[:, i * (chunk_length - 2) : (i + 1) * (chunk_length - 2) + 2].clone()
+
+            # cover the head and the tail by the starting and the ending tokens
+            text_input_chunk[:, 0] = text_input[0, 0]
+            text_input_chunk[:, -1] = text_input[0, -1]
+            text_embedding = pipe.text_encoder(text_input_chunk)[0]
+
+            if no_boseos_middle:
+                if i == 0:
+                    # discard the ending token
+                    text_embedding = text_embedding[:, :-1]
+                elif i == max_embeddings_multiples - 1:
+                    # discard the starting token
+                    text_embedding = text_embedding[:, 1:]
+                else:
+                    # discard both starting and ending tokens
+                    text_embedding = text_embedding[:, 1:-1]
+
+            text_embeddings.append(text_embedding)
+        text_embeddings = torch.concat(text_embeddings, axis=1)
+    else:
+        text_embeddings = pipe.text_encoder(text_input)[0]
     return text_embeddings
 
 
@@ -210,7 +252,6 @@ def get_weighted_text_embeddings(
     no_boseos_middle: Optional[bool] = False,
     skip_parsing: Optional[bool] = False,
     skip_weighting: Optional[bool] = False,
-    **kwargs,
 ):
     r"""
     Prompts can be assigned with local weights using brackets. For example,
@@ -235,7 +276,7 @@ def get_weighted_text_embeddings(
         skip_weighting (`bool`, *optional*, defaults to `False`):
             Skip the weighting. When the parsing is skipped, it is forced True.
     """
-    max_length = (pipe.tokenizer.model_max_length - 2)
+    max_length = (pipe.tokenizer.model_max_length - 2) * max_embeddings_multiples + 2
     if isinstance(prompt, str):
         prompt = [prompt]
 
@@ -264,22 +305,38 @@ def get_weighted_text_embeddings(
     if uncond_prompt is not None:
         max_length = max(max_length, max([len(token) for token in uncond_tokens]))
 
-    eos = pipe.tokenizer.eos_token_id
+    max_embeddings_multiples = min(
+        max_embeddings_multiples,
+        (max_length - 1) // (pipe.tokenizer.model_max_length - 2) + 1,
+    )
+    max_embeddings_multiples = max(1, max_embeddings_multiples)
+    max_length = (pipe.tokenizer.model_max_length - 2) * max_embeddings_multiples + 2
 
+    # pad the length of tokens and weights
+    bos = pipe.tokenizer.bos_token_id
+    eos = pipe.tokenizer.eos_token_id
+    pad = getattr(pipe.tokenizer, "pad_token_id", eos)
     prompt_tokens, prompt_weights = pad_tokens_and_weights(
         prompt_tokens,
         prompt_weights,
-        eos,
         max_length,
-        
+        bos,
+        eos,
+        pad,
+        no_boseos_middle=no_boseos_middle,
+        chunk_length=pipe.tokenizer.model_max_length,
     )
     prompt_tokens = torch.tensor(prompt_tokens, dtype=torch.long, device=pipe.device)
     if uncond_prompt is not None:
         uncond_tokens, uncond_weights = pad_tokens_and_weights(
             uncond_tokens,
             uncond_weights,
-            eos,
             max_length,
+            bos,
+            eos,
+            pad,
+            no_boseos_middle=no_boseos_middle,
+            chunk_length=pipe.tokenizer.model_max_length,
         )
         uncond_tokens = torch.tensor(uncond_tokens, dtype=torch.long, device=pipe.device)
 
@@ -287,12 +344,16 @@ def get_weighted_text_embeddings(
     text_embeddings = get_unweighted_text_embeddings(
         pipe,
         prompt_tokens,
+        pipe.tokenizer.model_max_length,
+        no_boseos_middle=no_boseos_middle,
     )
     prompt_weights = torch.tensor(prompt_weights, dtype=text_embeddings.dtype, device=pipe.device)
     if uncond_prompt is not None:
         uncond_embeddings = get_unweighted_text_embeddings(
             pipe,
             uncond_tokens,
+            pipe.tokenizer.model_max_length,
+            no_boseos_middle=no_boseos_middle,
         )
         uncond_weights = torch.tensor(uncond_weights, dtype=uncond_embeddings.dtype, device=pipe.device)
 
@@ -316,7 +377,7 @@ def get_weighted_text_embeddings(
 
 def preprocess_image(image):
     w, h = image.size
-    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
+    w, h = (x - x % 32 for x in (w, h))  # resize to integer multiple of 32
     image = image.resize((w, h), resample=PIL_INTERPOLATION["lanczos"])
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0, 3, 1, 2)
@@ -327,7 +388,7 @@ def preprocess_image(image):
 def preprocess_mask(mask, scale_factor=8):
     mask = mask.convert("L")
     w, h = mask.size
-    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
+    w, h = (x - x % 32 for x in (w, h))  # resize to integer multiple of 32
     mask = mask.resize((w // scale_factor, h // scale_factor), resample=PIL_INTERPOLATION["nearest"])
     mask = np.array(mask).astype(np.float32) / 255.0
     mask = np.tile(mask, (4, 1, 1))
@@ -337,7 +398,7 @@ def preprocess_mask(mask, scale_factor=8):
     return mask
 
 
-class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
+class StableDiffusionLongPromptWeightingMultiUNetPipeline(StableDiffusionPipeline):
     r"""
     Pipeline for text-to-image generation using Stable Diffusion without tokens length limit, and support parsing
     weighting in prompt.
@@ -394,8 +455,8 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         def __init__(
             self,
             vae: AutoencoderKL,
-            text_encoder: T5EncoderModel,
-            tokenizer: T5Tokenizer,
+            text_encoder: CLIPTextModel,
+            tokenizer: CLIPTokenizer,
             unet: UNet2DConditionModel,
             scheduler: SchedulerMixin,
             safety_checker: StableDiffusionSafetyChecker,
@@ -536,7 +597,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         latents = 1 / 0.18215 * latents
         image = self.vae.decode(latents).sample
         image = (image / 2 + 0.5).clamp(0, 1)
-        # we always cast to float32 as this does not cause significant overhead and is compatible with bfloa16
+        # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
         image = image.cpu().permute(0, 2, 3, 1).float().numpy()
         return image
 
@@ -561,7 +622,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         if image is None:
             shape = (
                 batch_size,
-                self.unet.in_channels,
+                self.unet.config.in_channels,
                 height // self.vae_scale_factor,
                 width // self.vae_scale_factor,
             )
@@ -596,6 +657,8 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             latents = self.scheduler.add_noise(init_latents, noise, timestep)
             return latents, init_latents_orig, noise
 
+    def setUNet2(self,unet2):
+        self.unet2 = unet2
     @torch.no_grad()
     def __call__(
         self,
@@ -617,8 +680,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         is_cancelled_callback: Optional[Callable[[], bool]] = None,
-        callback_steps: Optional[int] = 1,
-        **kwargs,
+        callback_steps: int = 1,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -692,10 +754,6 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             list of `bool`s denoting whether the corresponding generated image likely represents "not-safe-for-work"
             (nsfw) content, according to the `safety_checker`.
         """
-        message = "Please use `image` instead of `init_image`."
-        init_image = deprecate("init_image", "0.13.0", message, take_from=kwargs)
-        image = init_image or image
-
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
@@ -762,13 +820,22 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
+            if t<500:
             # predict the noise residual
-            noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            else:
+                noise_pred = self.unet2(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
 
             # perform guidance
             if do_classifier_free_guidance:
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                # sigma_cfg = torch.std(noise_pred)
+                # sigma_pos = torch.std(noise_pred_text)
+                # noise_pred_rescaled = noise_pred*(sigma_pos/sigma_cfg)
+                # phi = 0.7
+                # noise_pred_new = phi*noise_pred_rescaled + (1-phi)*noise_pred
+                # noise_pred = noise_pred_new
 
             # compute the previous noisy sample x_t -> x_t-1
             latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
@@ -785,15 +852,31 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
                 if is_cancelled_callback is not None and is_cancelled_callback():
                     return None
 
-        # 9. Post-processing
-        image = self.decode_latents(latents)
+        # # 9. Post-processing
+        # image = self.decode_latents(latents)
 
-        # 10. Run safety checker
-        image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
+        # # 10. Run safety checker
+        # image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
 
-        # 11. Convert to PIL
-        if output_type == "pil":
+        # # 11. Convert to PIL
+        # if output_type == "pil":
+        #     image = self.numpy_to_pil(image)
+
+        if output_type == "latent":
+            image = latents
+            has_nsfw_concept = None
+        elif output_type == "pil":
+            # 8. Post-processing
+            image = self.decode_latents(latents)
+
+            # 9. Run safety checker
+            image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
+
+            # 10. Convert to PIL
             image = self.numpy_to_pil(image)
+        else:
+            # 8. Post-processing
+            image = self.decode_latents(latents)
 
         if not return_dict:
             return image, has_nsfw_concept
@@ -817,8 +900,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         is_cancelled_callback: Optional[Callable[[], bool]] = None,
-        callback_steps: Optional[int] = 1,
-        **kwargs,
+        callback_steps: int = 1,
     ):
         r"""
         Function for text-to-image generation.
@@ -894,7 +976,6 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             callback=callback,
             is_cancelled_callback=is_cancelled_callback,
             callback_steps=callback_steps,
-            **kwargs,
         )
 
     def img2img(
@@ -913,8 +994,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         is_cancelled_callback: Optional[Callable[[], bool]] = None,
-        callback_steps: Optional[int] = 1,
-        **kwargs,
+        callback_steps: int = 1,
     ):
         r"""
         Function for image-to-image generation.
@@ -990,7 +1070,6 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             callback=callback,
             is_cancelled_callback=is_cancelled_callback,
             callback_steps=callback_steps,
-            **kwargs,
         )
 
     def inpaint(
@@ -1010,8 +1089,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         is_cancelled_callback: Optional[Callable[[], bool]] = None,
-        callback_steps: Optional[int] = 1,
-        **kwargs,
+        callback_steps: int = 1,
     ):
         r"""
         Function for inpaint.
@@ -1092,5 +1170,4 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             callback=callback,
             is_cancelled_callback=is_cancelled_callback,
             callback_steps=callback_steps,
-            **kwargs,
         )

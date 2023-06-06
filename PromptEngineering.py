@@ -41,10 +41,15 @@ class RandomArtistGenerator:
 class RandomImageSizeGenerator:
     def __init__(self, sizeSet='big', customSizeList=None) -> None:
         self.sizeListDict = {
-            'huge': [(1024, 1024), (1280, 768), (1280, 640), (1280, 832)],
-            'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896), (1088, 512)],
+            'giant': [(1280, 1280), (1536, 768), (1536, 832), (1536, 1024)],
+            #'huge': [(1024, 1024), (1216, 768), (1152, 768),(1088, 704)],
+            'huge': [(1088, 1088), (1152, 768), (1152, 832)],
+            'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896)],
+            'littleMedium' : [(768, 768), (1024, 768), (1024, 640)],
+            'medium' : [(1024, 1024),(768, 768), (1024, 768), (1024, 640)],
             'small': [(768, 768), (512, 512), (768, 640), (768, 512)],
             'square': [(768, 768), (832, 832), (1024, 1024)],
+            'big_square': [(1024, 1024),(1152,1152)],
         }
         if customSizeList:
             self.sizeList = customSizeList
@@ -59,10 +64,14 @@ class RandomImageSizeGenerator:
 
 
 class PromptGenerator:
-    def __init__(self, promptList, negativePrompt=None, artistGenerator=None) -> None:
+    def __init__(self, promptList, 
+                 negativePrompt=None, 
+                 artistGenerator=None,
+                 postivePrompt=None) -> None:
         self.artistGenerator = artistGenerator
         self.promptList = promptList
         self.negativePrompt = negativePrompt
+        self.postivePrompt = postivePrompt
 
     def getPrompt(self):
         returnDict = {}
@@ -85,6 +94,8 @@ class PromptGenerator:
         else:
             raise RuntimeError('Wrong Prompt type')
         rawPrompt = prompt
+        if self.postivePrompt:
+            prompt = self.postivePrompt + ',' + prompt
         if self.artistGenerator:
             prompt = prompt+',by artist '+self.artistGenerator.getArtist()
         returnDict.update({

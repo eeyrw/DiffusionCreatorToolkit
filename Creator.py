@@ -1,3 +1,7 @@
+from diffusers import UniPCMultistepScheduler, DDIMScheduler
+import diffusers
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from transformers import CLIPTextModel, CLIPTokenizer
 import random
 import torch
 import os
@@ -7,16 +11,14 @@ import json
 import piexif
 import copy
 torch.backends.cuda.matmul.allow_tf32 = True
-from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
-from diffusers import UniPCMultistepScheduler
-import diffusers
 
 # {
 #     'vae': '.ARTMAN_HUGE_144000',
 #     'textEncoder':'.ARTMAN_HUGE_144000',
 #     'models':[{'name':'.ARTMAN_HUGE_144000','factor':0.5},]
 #     }
+
+
 class DiffusionCreator:
     def __init__(self, modelWeightRoot='.',
                  modelCfgDict=[
@@ -32,12 +34,12 @@ class DiffusionCreator:
         self.blendMetaInfoDict = {}
         self.loadModel()
 
-    def parseModelPath(self,modelPath,modelWeightRoot):
+    def parseModelPath(self, modelPath, modelWeightRoot):
         if modelPath[0] == '.':
             modelPath = os.path.join(
-                modelWeightRoot, modelPath[1:])   
+                modelWeightRoot, modelPath[1:])
         return modelPath
-         
+
     def loadModel(self):
         self.loadMultiModel(self.modelCfgDict['models'])
         baseModelName = self.modelCfgDict['models'][0]['name']
@@ -46,36 +48,69 @@ class DiffusionCreator:
             unetWeight = self.blendModel(self.modelCfgDict['models'])
             tempUNet.load_state_dict(unetWeight)
 
-        baseModelName = self.parseModelPath(baseModelName,self.modelWeightRoot)
+        baseModelName = self.parseModelPath(
+            baseModelName, self.modelWeightRoot)
 
         pipeArgDict = {}
 
         from lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
+        from lpw_stable_diffusion_multi import StableDiffusionLongPromptWeightingMultiUNetPipeline
 
         if 'vae' in self.modelCfgDict.keys():
-            vaePath = self.parseModelPath(self.modelCfgDict['vae'],self.modelWeightRoot)
-            pipeArgDict['vae'] = AutoencoderKL.from_pretrained(vaePath,subfolder = 'vae', cache_dir = self.modelWeightRoot)
+            vaePath = self.parseModelPath(
+                self.modelCfgDict['vae'], self.modelWeightRoot)
+            pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
+                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot)
 
         if 'textEncoder' in self.modelCfgDict.keys():
-            textEncoderPath = self.parseModelPath(self.modelCfgDict['textEncoder'],self.modelWeightRoot)
-            pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(textEncoderPath,subfolder = 'text_encoder', cache_dir = self.modelWeightRoot)
-            pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(textEncoderPath,subfolder = 'tokenizer', cache_dir = self.modelWeightRoot)
+            textEncoderPath = self.parseModelPath(
+                self.modelCfgDict['textEncoder'], self.modelWeightRoot)
+            pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
+                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot)
+            pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(
+                textEncoderPath, subfolder='tokenizer', cache_dir=self.modelWeightRoot)
 
-
-            
-        self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
-            baseModelName, cache_dir=self.modelWeightRoot,
-            unet=tempUNet,
-            feature_extractor=None,
-            safety_checker=None,
-            torch_dtype=self.defaultDType,
-            **pipeArgDict
-        )
+        if 'multiUNet' in self.modelCfgDict.keys():
+            self.pipe = StableDiffusionLongPromptWeightingMultiUNetPipeline.from_pretrained(
+                baseModelName, cache_dir=self.modelWeightRoot,
+                unet=self.modelUNetList[self.modelCfgDict['models'][0]['name']],
+                feature_extractor=None,
+                safety_checker=None,
+                torch_dtype=self.defaultDType,
+                **pipeArgDict
+            )
+            self.modelUNetList[self.modelCfgDict['models'][1]['name']].enable_xformers_memory_efficient_attention()
+            self.modelUNetList[self.modelCfgDict['models'][1]['name']].to('cuda')
+            self.pipe.setUNet2(self.modelUNetList[self.modelCfgDict['models'][1]['name']])
+        else:
+            self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
+                baseModelName, cache_dir=self.modelWeightRoot,
+                unet=tempUNet,
+                feature_extractor=None,
+                safety_checker=None,
+                torch_dtype=self.defaultDType,
+                **pipeArgDict
+            )
 
         if 'scheduler' in self.modelCfgDict.keys():
-            scheduer = getattr(diffusers,self.modelCfgDict['scheduler'])
-            self.pipe.scheduler = scheduer.from_config(self.pipe.scheduler.config)
-        
+            if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
+                self.pipe.scheduler = DDIMScheduler(
+                    **{
+                        "beta_end": 0.012,
+                        "beta_schedule": "scaled_linear",
+                        "beta_start": 0.00085,
+                        "clip_sample": False,
+                        "num_train_timesteps": 1000,
+                        "prediction_type": "epsilon",
+                        "set_alpha_to_one": False,
+                        "steps_offset": 1,
+                    }
+                )
+            else:
+                scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
+                self.pipe.scheduler = scheduer.from_config(
+                    self.pipe.scheduler.config)
+
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
 
@@ -215,7 +250,7 @@ class DiffusionCreator:
         else:
             exif_dat = self.getExif(exifGenMetaInfoDict)
             image.save(os.path.join(outputDir, '%d.jpg' %
-                    seed), quality=90, exif=exif_dat)
+                                    seed), quality=90, exif=exif_dat)
 
     def to(self, device):
         self.pipe.to(device)

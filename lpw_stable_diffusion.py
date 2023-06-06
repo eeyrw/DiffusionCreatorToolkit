@@ -421,7 +421,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
         safety_checker ([`StableDiffusionSafetyChecker`]):
             Classification module that estimates whether generated images could be considered offensive or harmful.
             Please, refer to the [model card](https://huggingface.co/CompVis/stable-diffusion-v1-4) for details.
-        feature_extractor ([`CLIPImageProcessor`]):
+        feature_extractor ([`CLIPFeatureExtractor`]):
             Model that extracts features from generated images to be used as inputs for the `safety_checker`.
     """
 
@@ -435,7 +435,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             unet: UNet2DConditionModel,
             scheduler: SchedulerMixin,
             safety_checker: StableDiffusionSafetyChecker,
-            feature_extractor: CLIPImageProcessor,
+            feature_extractor: CLIPFeatureExtractor,
             requires_safety_checker: bool = True,
         ):
             super().__init__(
@@ -460,7 +460,7 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             unet: UNet2DConditionModel,
             scheduler: SchedulerMixin,
             safety_checker: StableDiffusionSafetyChecker,
-            feature_extractor: CLIPImageProcessor,
+            feature_extractor: CLIPFeatureExtractor,
         ):
             super().__init__(
                 vae=vae,
@@ -825,6 +825,12 @@ class StableDiffusionLongPromptWeightingPipeline(StableDiffusionPipeline):
             if do_classifier_free_guidance:
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                # sigma_cfg = torch.std(noise_pred)
+                # sigma_pos = torch.std(noise_pred_text)
+                # noise_pred_rescaled = noise_pred*(sigma_pos/sigma_cfg)
+                # phi = 0.7
+                # noise_pred_new = phi*noise_pred_rescaled + (1-phi)*noise_pred
+                # noise_pred = noise_pred_new
 
             # compute the previous noisy sample x_t -> x_t-1
             latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
