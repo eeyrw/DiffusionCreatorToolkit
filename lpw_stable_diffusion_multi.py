@@ -438,6 +438,7 @@ class StableDiffusionLongPromptWeightingMultiUNetPipeline(StableDiffusionPipelin
             feature_extractor: CLIPFeatureExtractor,
             requires_safety_checker: bool = True,
         ):
+            self.unetList = [unet]
             super().__init__(
                 vae=vae,
                 text_encoder=text_encoder,
@@ -657,8 +658,8 @@ class StableDiffusionLongPromptWeightingMultiUNetPipeline(StableDiffusionPipelin
             latents = self.scheduler.add_noise(init_latents, noise, timestep)
             return latents, init_latents_orig, noise
 
-    def setUNet2(self,unet2):
-        self.unet2 = unet2
+    def appendExtraUNet(self,unet):
+        self.unetList.append(unet)
     @torch.no_grad()
     def __call__(
         self,
@@ -820,11 +821,28 @@ class StableDiffusionLongPromptWeightingMultiUNetPipeline(StableDiffusionPipelin
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-            if t<500:
+
+            tsInterval = self.scheduler.config.num_train_timesteps // (len(self.unetList))
+
+            selectedUNet = self.unetList[int(t)//tsInterval]
             # predict the noise residual
-                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            
+            sourceDevice = latent_model_input.device
+            targetDevice = selectedUNet.device
+
+            if sourceDevice!=targetDevice:
+                # latent_model_input = latent_model_input.to(targetDevice)
+                # t = t.to(targetDevice)
+                # text_embeddings = text_embeddings.to(targetDevice)
+                
+                noise_pred = selectedUNet(latent_model_input.to(targetDevice), t.to(targetDevice), encoder_hidden_states=text_embeddings.to(targetDevice)).sample
+
+                # latent_model_input = latent_model_input.to(sourceDevice)
+                # t = t.to(sourceDevice)
+                # text_embeddings = text_embeddings.to(sourceDevice)
+                noise_pred = noise_pred.to(sourceDevice)  
             else:
-                noise_pred = self.unet2(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+                noise_pred = selectedUNet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample             
 
             # perform guidance
             if do_classifier_free_guidance:

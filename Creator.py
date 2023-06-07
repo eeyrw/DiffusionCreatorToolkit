@@ -60,13 +60,13 @@ class DiffusionCreator:
             vaePath = self.parseModelPath(
                 self.modelCfgDict['vae'], self.modelWeightRoot)
             pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot)
+                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
 
         if 'textEncoder' in self.modelCfgDict.keys():
             textEncoderPath = self.parseModelPath(
                 self.modelCfgDict['textEncoder'], self.modelWeightRoot)
             pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
-                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot)
+                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
             pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(
                 textEncoderPath, subfolder='tokenizer', cache_dir=self.modelWeightRoot)
 
@@ -79,9 +79,15 @@ class DiffusionCreator:
                 torch_dtype=self.defaultDType,
                 **pipeArgDict
             )
-            self.modelUNetList[self.modelCfgDict['models'][1]['name']].enable_xformers_memory_efficient_attention()
-            self.modelUNetList[self.modelCfgDict['models'][1]['name']].to('cuda')
-            self.pipe.setUNet2(self.modelUNetList[self.modelCfgDict['models'][1]['name']])
+            print('%s -> %s'%(self.modelCfgDict['models'][0]['name'],
+                              self.modelUNetList[self.modelCfgDict['models'][0]['name']].device))
+            modelCnt=1
+            for model in self.modelCfgDict['models'][1:]:
+                self.modelUNetList[model['name']].enable_xformers_memory_efficient_attention()
+                self.modelUNetList[model['name']].to('cuda:%d'%(modelCnt//2))
+                print('%s -> %s'%(model['name'],self.modelUNetList[model['name']].device))                
+                modelCnt = modelCnt+1
+                self.pipe.appendExtraUNet(self.modelUNetList[model['name']])
         else:
             self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
                 baseModelName, cache_dir=self.modelWeightRoot,
