@@ -5,11 +5,13 @@ from transformers import CLIPTextModel, CLIPTokenizer
 import random
 import torch
 import os
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, AutoencoderKL, UNet2DConditionModel
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, AutoencoderKL, UNet2DConditionModel,UniPCMultistepScheduler
 from transformers import CLIPTextModel
 import json
 import piexif
 import copy
+from DF2SD import exportToSD
+from PIL import Image
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # {
@@ -21,18 +23,20 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 class DiffusionCreator:
     def __init__(self, modelWeightRoot='.',
-                 modelCfgDict=[
-                     {'name': 'runwayml/stable-diffusion-v1-5', 'factor': 1}],
+                 modelCfgDict=None,
                  defaultDType=torch.float16,
                  useXformers=False,
-                 loadMode='blend') -> None:
+                 loadMode='weightMix',
+                 blendInfoFile=None) -> None:
         self.modelWeightRoot = modelWeightRoot
         self.modelCfgDict = modelCfgDict
         self.defaultDType = defaultDType
         self.useXformers = useXformers
         self.randGenerator = torch.Generator()
         self.blendMetaInfoDict = {}
-        self.loadModel()
+        self.specifiedBlendInfo = None
+        if self.modelCfgDict is not None:
+            self.loadModel(blendInfoFile,loadMode)
 
     def parseModelPath(self, modelPath, modelWeightRoot):
         if modelPath[0] == '.':
@@ -40,12 +44,18 @@ class DiffusionCreator:
                 modelWeightRoot, modelPath[1:])
         return modelPath
 
-    def loadModel(self):
+    def loadModel(self,blendInfoFile,blendMode):
+        if blendInfoFile is not None:
+            with open(blendInfoFile,'r') as f:
+                self.specifiedBlendInfo = json.load(f)
+                self.modelCfgDict['models'] = self.specifiedBlendInfo['models']['models']
+                blendMode = self.specifiedBlendInfo['blendInfo']['mode']
+
         self.loadMultiModel(self.modelCfgDict['models'])
         baseModelName = self.modelCfgDict['models'][0]['name']
         tempUNet = copy.deepcopy(self.modelUNetList[baseModelName])
         if len(self.modelCfgDict['models']) > 1:
-            unetWeight = self.blendModel(self.modelCfgDict['models'])
+            unetWeight = self.blendModel(self.modelCfgDict['models'],blendMode=blendMode)
             tempUNet.load_state_dict(unetWeight)
 
         baseModelName = self.parseModelPath(
@@ -154,7 +164,10 @@ class DiffusionCreator:
         if blendMode == 'randLayer':
             tempStateChoosenDict = {}
             for weightKey in firstModelWeightKeys:
-                randomIndex = random.randint(0, len(blendParamDictList)-1)
+                if self.specifiedBlendInfo is not None:
+                    randomIndex = self.specifiedBlendInfo['blendInfo']['param'][weightKey]
+                else:          
+                    randomIndex = random.randint(0, len(blendParamDictList)-1)
                 choosenModelParamDict = blendParamDictList[randomIndex]
                 choosenModelName = choosenModelParamDict['name']
                 tempStateDict[weightKey] = self.modelUNetList[choosenModelName].state_dict()[
@@ -175,12 +188,38 @@ class DiffusionCreator:
                 for weightKey, weightTensor in tempStateDict.items():
                     tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
                         weightKey]*modelFactor
+        elif blendMode == 'bavMix':
+            factorDict = {0: firstModelFactor}
+            for key in self.modelUNetList[firstModelName].state_dict().keys():
+                values = [model.state_dict()[key] for model in self.modelUNetList.values()]
+                mean_value = sum(values) / len(values)
+
+                alpha = 0.4
+                beta = 1.6
+                tempStateDict[key] = mean_value * (abs(self.modelUNetList[firstModelName].state_dict()[key] - alpha*mean_value) > abs(self.modelUNetList[firstModelName].state_dict()[key] - beta*values[0])) \
+                    + values[0] * (abs(self.modelUNetList[firstModelName].state_dict()[key] - alpha*mean_value) <= abs(self.modelUNetList[firstModelName].state_dict()[key] - beta*values[0]))
+
 
             blendMetaInfoDict['param'] = factorDict
 
         self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
+    
+    def recordBlendMetaInfo(self,outputPath):
+        with open(outputPath,'w') as f:
+            json.dump({'blendInfo':self.blendMetaInfoDict,'models':self.modelCfgDict},f)
+
+    def outputUNetWeightInfo(self,outputPath):
+        with open(outputPath,'w') as f:
+            for weightKey in self.pipe.unet.state_dict():
+                f.write(weightKey+'\n')
+
+    def exportSDModel(self,outputPath):
+        exportToSD(self.pipe.text_encoder.state_dict(),
+                   self.pipe.unet.state_dict(),
+                   self.pipe.vae.state_dict(),
+                   outputPath)
 
     def blendInRuntime(self, blendParamDictList, blendMode='weightMix'):
         self.pipe.unet.load_state_dict(
@@ -195,6 +234,20 @@ class DiffusionCreator:
                      "thumbnail": None, "GPS": {}}
         exif_dat = piexif.dump(exif_dict)
         return exif_dat
+    
+    def reproduce(self,refImagePath,device='cuda'):
+        img = Image.open(refImagePath)
+        exif_dict = piexif.load(img.info['exif'])
+        exifGenMetaInfoDict = json.loads(exif_dict['Exif'][piexif.ExifIFD.MakerNote])
+        self.modelCfgDict = exifGenMetaInfoDict.pop('model')
+        self.loadModel(None,'weightMix')
+        self.to(device)
+        exifGenMetaInfoDict.pop('blendMetaInfo')
+        self.generate(exifGenMetaInfoDict['prompt'],outputDir='reproduce_imgs',
+                      seed=exifGenMetaInfoDict.pop('seed'), extraArgDict=exifGenMetaInfoDict)
+
+
+        
 
     def generate(self, prompt,
                  outputDir='./imgs',
