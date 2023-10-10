@@ -1,6 +1,7 @@
 import csv
 import random
 from PIL import Image
+import json
 
 class RandomArtistGenerator:
     def __init__(self, artistDatabase='assets/artists.csv',
@@ -37,6 +38,24 @@ class RandomArtistGenerator:
         else:
             return random.choice(self.artistDictList)['artist']
 
+class StyleGenerator:
+    def __init__(self, styleDatabase='assets/Styles.json',
+                 specifiedStyle=None,
+                 specifiedStyleList=None) -> None:
+        with open(styleDatabase, newline='', encoding='utf8') as f:
+            self.styleList = json.load(f)
+            self.styleDict = {it['name']:it for it in self.styleList}
+
+        self.specifiedStyleList = specifiedStyleList
+        if specifiedStyle is not None:
+            self.specifiedStyleList = (specifiedStyle,)
+        if self.specifiedStyleList is None:
+            self.specifiedStyleList = list(self.styleDict.keys())
+
+    def getStyle(self):
+        styleName = random.choice(self.specifiedStyleList)
+        return self.styleDict[styleName]
+
 
 class RandomImageSizeGenerator:
     def __init__(self, sizeSet='big', customSizeList=None) -> None:
@@ -44,7 +63,7 @@ class RandomImageSizeGenerator:
             'giant': [(1280, 1280), (1536, 768), (1536, 832), (1536, 1024)],
             #'huge': [(1024, 1024), (1216, 768), (1152, 768),(1088, 704)],
             'huge': [(1088, 1088), (1152, 768), (1152, 832)],
-            'big': [(1088, 832), (1088, 768), (1088, 640), (896, 896)],
+            'big': [(1088, 832), (1088, 768), (1088, 640), (1024, 1024)],
             'littleMedium' : [(768, 768), (1024, 768), (1024, 640)],
             'medium' : [(1024, 1024),(768, 768), (1024, 768), (1024, 640)],
             'small': [(768, 768), (512, 512), (768, 640), (768, 512)],
@@ -65,13 +84,55 @@ class RandomImageSizeGenerator:
 
 class PromptGenerator:
     def __init__(self, promptList, 
-                 negativePrompt=None, 
+                 negativePrompt=None,
+                 templatePrompt=None, 
                  artistGenerator=None,
+                 styleGenerator=None,
                  postivePrompt=None) -> None:
         self.artistGenerator = artistGenerator
         self.promptList = promptList
         self.negativePrompt = negativePrompt
         self.postivePrompt = postivePrompt
+        self.templatePrompt = templatePrompt
+        self.styleGenerator = styleGenerator
+
+    def getSplitPrompt(self):
+        returnDict = {}
+        additionalNegPrompt = ''
+        rawPrompt = random.choice(self.promptList)
+        if isinstance(rawPrompt, (tuple, list)):
+            prompt = rawPrompt[0]
+            additionalNegPrompt = rawPrompt[1]+','
+        elif isinstance(rawPrompt, str):
+            prompt = rawPrompt
+            additionalNegPrompt = ''
+        elif isinstance(rawPrompt, dict):
+            print(rawPrompt)
+            prompt = rawPrompt['prompt']
+            if 'additionalNegPrompt' in rawPrompt.keys():
+                additionalNegPrompt = rawPrompt['additionalNegPrompt']
+            if 'refImage' in rawPrompt.keys():
+                rawPrompt['init_image'] = Image.open(rawPrompt['refImage'])
+            returnDict.update(rawPrompt)
+        else:
+            raise RuntimeError('Wrong Prompt type')
+        rawPrompt = prompt
+        if self.postivePrompt:
+            postivePrompt = self.postivePrompt
+            prompt = '(%s),%s'%(prompt,postivePrompt)
+        else:
+            postivePrompt = ''
+
+        prompt2 = prompt
+        if self.artistGenerator:
+            prompt2 = postivePrompt+',by artist '+self.artistGenerator.getArtist()
+        returnDict.update({
+            'originalPrompt': rawPrompt,
+            'prompt': prompt,
+            'prompt_2': prompt2,
+            'negative_prompt': additionalNegPrompt + self.negativePrompt,
+        })
+        return returnDict
 
     def getPrompt(self):
         returnDict = {}
@@ -94,10 +155,18 @@ class PromptGenerator:
         else:
             raise RuntimeError('Wrong Prompt type')
         rawPrompt = prompt
+
         if self.postivePrompt:
-            prompt = self.postivePrompt + ',' + prompt
+            prompt = '%s,%s'%(self.postivePrompt,prompt)
         if self.artistGenerator:
-            prompt = prompt+',by artist '+self.artistGenerator.getArtist()
+            prompt = prompt +',by artist '+self.artistGenerator.getArtist()
+        if self.styleGenerator:
+            style = self.styleGenerator.getStyle()
+            prompt = style['prompt'].format(prompt=prompt)
+            additionalNegPrompt = style['negative_prompt']
+        if self.templatePrompt:
+            prompt = self.templatePrompt.format(prompt=prompt)
+            
         returnDict.update({
             'originalPrompt': rawPrompt,
             'prompt': prompt,
