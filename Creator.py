@@ -70,19 +70,19 @@ class DiffusionCreator:
             vaePath = self.parseModelPath(
                 self.modelCfgDict['vae'], self.modelWeightRoot)
             pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot,local_files_only=True, torch_dtype=self.defaultDType)
 
         if 'textEncoder' in self.modelCfgDict.keys():
             textEncoderPath = self.parseModelPath(
                 self.modelCfgDict['textEncoder'], self.modelWeightRoot)
             pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
-                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
+                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot,local_files_only=True, torch_dtype=self.defaultDType)
             pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(
                 textEncoderPath, subfolder='tokenizer', cache_dir=self.modelWeightRoot)
 
         if 'multiUNet' in self.modelCfgDict.keys():
             self.pipe = StableDiffusionLongPromptWeightingMultiUNetPipeline.from_pretrained(
-                baseModelName, cache_dir=self.modelWeightRoot,
+                baseModelName, cache_dir=self.modelWeightRoot,local_files_only=True,
                 unet=self.modelUNetList[self.modelCfgDict['models'][0]['name']],
                 feature_extractor=None,
                 safety_checker=None,
@@ -100,7 +100,7 @@ class DiffusionCreator:
                 self.pipe.appendExtraUNet(self.modelUNetList[model['name']])
         else:
             self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
-                baseModelName, cache_dir=self.modelWeightRoot,
+                baseModelName, cache_dir=self.modelWeightRoot,local_files_only=True,
                 unet=tempUNet,
                 feature_extractor=None,
                 safety_checker=None,
@@ -126,7 +126,16 @@ class DiffusionCreator:
                 scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
                 self.pipe.scheduler = scheduer.from_config(
                     self.pipe.scheduler.config)
-
+        if 'loras' in self.modelCfgDict.keys():  
+            if len(self.modelCfgDict['loras']) > 1:
+                self.loadMultiLora(self.modelCfgDict['loras'])
+                lora = self.blendLora(self.modelCfgDict['loras'],blendMode=blendMode)
+            else:
+                lora = self.pipe.lora_state_dict(self.modelCfgDict['loras'][0]['name'])
+            self.pipe.load_lora_weights(lora)           
+            self.applyLora = True
+        else:
+            self.applyLora = False
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
 
@@ -143,10 +152,64 @@ class DiffusionCreator:
             unet = UNet2DConditionModel.from_pretrained(
                 modelName,
                 subfolder='unet',
-                cache_dir=self.modelWeightRoot,
+                cache_dir=self.modelWeightRoot,local_files_only=True,
                 torch_dtype=self.defaultDType)
 
             self.modelUNetList[modelNameRaw] = unet
+
+    def loadMultiLora(self, blendParamDictList):
+        self.loraList = {}
+        for blendParamDict in blendParamDictList:
+            modelNameRaw = blendParamDict['name']
+            modelName = modelNameRaw
+
+            lora = self.pipe.lora_state_dict(modelName)
+
+            self.loraList[modelNameRaw] = lora
+
+    def blendLora(self, blendParamDictList, blendMode='weightMix'):
+        firstModelParamDict = blendParamDictList[0]
+        firstModelName = firstModelParamDict['name']
+        firstModelFactor = firstModelParamDict['factor']
+        firstModelWeightKeys = self.loraList[firstModelName][0].keys()
+
+        tempStateDict = {}
+        blendMetaInfoDict = {
+            'mode': blendMode,
+            'param': None
+        }
+
+        if blendMode == 'randLayer':
+            tempStateChoosenDict = {}
+            for weightKey in firstModelWeightKeys[0]:
+                if self.specifiedBlendInfo is not None:
+                    randomIndex = self.specifiedBlendInfo['blendInfo']['param'][weightKey]
+                else:          
+                    randomIndex = random.randint(0, len(blendParamDictList)-1)
+                choosenModelParamDict = blendParamDictList[randomIndex]
+                choosenModelName = choosenModelParamDict['name']
+                tempStateDict[weightKey] = self.loraList[choosenModelName][0][
+                    weightKey]
+                tempStateChoosenDict[weightKey] = randomIndex
+            blendMetaInfoDict['param'] = tempStateChoosenDict
+        elif blendMode == 'weightMix':
+            modelIdx = 0
+            factorDict = {modelIdx: firstModelFactor}
+            for weightKey, weightTensor in self.loraList[firstModelName][0].items():
+                tempStateDict[weightKey] = weightTensor*firstModelFactor
+
+            for modelParamDict in blendParamDictList[1:]:
+                modelName = modelParamDict['name']
+                modelFactor = modelParamDict['factor']
+                modelIdx += 1
+                factorDict[modelIdx] = modelFactor
+                for weightKey, weightTensor in tempStateDict.items():
+                    tempStateDict[weightKey] += self.loraList[modelName][0][
+                        weightKey]*modelFactor
+
+        self.blendMetaInfoDict = blendMetaInfoDict
+
+        return tempStateDict
 
     def blendModel(self, blendParamDictList, blendMode='weightMix'):
         firstModelParamDict = blendParamDictList[0]
@@ -259,6 +322,10 @@ class DiffusionCreator:
             self.randGenerator.manual_seed(seed)
         else:
             self.randGenerator.manual_seed(seed)
+
+
+        if (not self.applyLora) and 'cross_attention_kwargs' in extraArgDict.keys():
+            del extraArgDict['cross_attention_kwargs']
 
         if 'prompt' in extraArgDict.keys():
             prompt = extraArgDict['prompt']
