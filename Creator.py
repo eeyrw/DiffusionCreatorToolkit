@@ -131,7 +131,7 @@ class DiffusionCreator:
                 self.loadMultiLora(self.modelCfgDict['loras'])
                 lora = self.blendLora(self.modelCfgDict['loras'],blendMode=blendMode)
             else:
-                lora = self.pipe.lora_state_dict(self.modelCfgDict['loras'][0]['name'])
+                lora,_ = self.pipe.lora_state_dict(self.modelCfgDict['loras'][0]['name'])
             self.pipe.load_lora_weights(lora)           
             self.applyLora = True
         else:
