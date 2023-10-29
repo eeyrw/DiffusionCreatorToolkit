@@ -57,7 +57,7 @@ class DiffusionCreator:
 
 
         vae = AutoencoderKL.from_pretrained(
-            "madebyollin/sdxl-vae-fp16-fix",cache_dir=r"F:\StableDiffusionWeight",local_files_only=True, subfolder=None,
+            "madebyollin/sdxl-vae-fp16-fix",cache_dir=self.modelWeightRoot,local_files_only=True, subfolder=None,
             torch_dtype=self.defaultDType
         )
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
