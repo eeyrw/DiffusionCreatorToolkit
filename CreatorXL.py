@@ -35,6 +35,7 @@ class DiffusionCreator:
         self.randGenerator = torch.Generator()
         self.blendMetaInfoDict = {}
         self.specifiedBlendInfo = None
+        self.useRefiner = False
         if self.modelCfgDict is not None:
             self.loadModel(blendInfoFile, loadMode)
 
@@ -53,8 +54,15 @@ class DiffusionCreator:
         pipeArgDict = {}
 
         from lpw_stable_diffusion_xl import SDXLLongPromptWeightingPipeline
+
+
+        vae = AutoencoderKL.from_pretrained(
+            "madebyollin/sdxl-vae-fp16-fix",cache_dir=r"F:\StableDiffusionWeight",local_files_only=True, subfolder=None,
+            torch_dtype=self.defaultDType
+        )
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
+            vae=vae,
             variant='fp16',
             use_safetensors=True,
             torch_dtype=self.defaultDType,
@@ -63,18 +71,21 @@ class DiffusionCreator:
             **pipeArgDict
         )
 
-        refinerModelName = self.modelCfgDict['models'][0]['refiner']
-        refinerModelName = self.parseModelPath(
-            refinerModelName, self.modelWeightRoot)
+
+        if 'refiner' in self.modelCfgDict['models'][0].keys():
+            self.useRefiner = True
+            refinerModelName = self.modelCfgDict['models'][0]['refiner']
+            refinerModelName = self.parseModelPath(
+                refinerModelName, self.modelWeightRoot)
 
 
-        self.pipeRefiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-            refinerModelName,
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-            variant="fp16",
-            add_watermarker=False,
-             cache_dir=self.modelWeightRoot,local_files_only=True,**pipeArgDict)
+            self.pipeRefiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                refinerModelName,
+                torch_dtype=torch.float16,
+                use_safetensors=True,
+                variant="fp16",
+                add_watermarker=False,
+                cache_dir=self.modelWeightRoot,local_files_only=True,**pipeArgDict)
 
         if 'scheduler' in self.modelCfgDict.keys():
             if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
@@ -94,11 +105,13 @@ class DiffusionCreator:
                 scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
                 self.pipe.scheduler = scheduer.from_config(
                     self.pipe.scheduler.config)
-                self.pipeRefiner.scheduler = scheduer.from_config(
-                    self.pipe.scheduler.config)
+                if self.useRefiner:
+                    self.pipeRefiner.scheduler = scheduer.from_config(
+                        self.pipe.scheduler.config)
         if self.useXformers:
             self.pipe.enable_xformers_memory_efficient_attention()
-            self.pipeRefiner.enable_xformers_memory_efficient_attention()
+            if self.useRefiner:
+                self.pipeRefiner.enable_xformers_memory_efficient_attention()
 
     def recordBlendMetaInfo(self, outputPath):
         with open(outputPath, 'w') as f:
@@ -193,21 +206,29 @@ class DiffusionCreator:
 
         high_noise_frac = 0.8
 
-        image = self.pipe(
-            generator=self.randGenerator,
-            denoising_end=high_noise_frac,
-            output_type="latent",
-            **argDict
-        ).images
-        del argDict['height']
-        del argDict['width']
-        image = self.pipeRefiner(
-            denoising_start=high_noise_frac,
-            aesthetic_score = 4,
-            negative_aesthetic_score = 1,
-            image=image,
-            **argDict
-        ).images[0]
+        if self.useRefiner:
+            image = self.pipe(
+                generator=self.randGenerator,
+                denoising_end=high_noise_frac,
+                output_type="latent",
+                **argDict
+            ).images
+
+            del argDict['height']
+            del argDict['width']
+            image = self.pipeRefiner(
+                denoising_start=high_noise_frac,
+                aesthetic_score = 4,
+                negative_aesthetic_score = 1,
+                image=image,
+                **argDict
+            ).images[0]
+
+        else:
+            image = self.pipe(
+                generator=self.randGenerator,
+                **argDict
+            ).images[0]            
 
         exifGenMetaInfoDict = genMetaInfoDict
         if 'image' in exifGenMetaInfoDict.keys():
@@ -222,7 +243,8 @@ class DiffusionCreator:
 
     def to(self, device):
         self.pipe.to(device)
-        self.pipeRefiner.to('cuda:1')
+        if self.useRefiner:
+            self.pipeRefiner.to('cuda:1')
         self.randGenerator = torch.Generator(device=device)
 
 
