@@ -5,7 +5,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 import random
 import torch
 import os
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, AutoencoderKL, UNet2DConditionModel,UniPCMultistepScheduler
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, DPMSolverSinglestepScheduler, AutoencoderKL, UNet2DConditionModel, UniPCMultistepScheduler
 from transformers import CLIPTextModel
 import json
 import piexif
@@ -28,6 +28,23 @@ class DiffusionCreator:
                  useXformers=False,
                  loadMode='weightMix',
                  blendInfoFile=None) -> None:
+        self.schedulerMapping = {
+            'DPM++ 2M': ('DPMSolverMultistepScheduler', {}),
+            'DPM++ 2M Karras': ('DPMSolverMultistepScheduler', {'use_karras_sigmas': True}),
+            'DPM++ 2M SDE': ('DPMSolverMultistepScheduler', {'algorithm_type': 'sde-dpmsolver++'}),
+            'DPM++ 2M SDE Karras': ('DPMSolverMultistepScheduler', {'algorithm_type': 'sde-dpmsolver++', 'use_karras_sigmas': True}),
+            'DPM++ SDE': ('DPMSolverSinglestepScheduler', {}),
+            'DPM++ SDE Karras': ('DPMSolverSinglestepScheduler', {'use_karras_sigmas': True}),
+            'DPM2': ('KDPM2DiscreteScheduler', {}),
+            'DPM2 Karras': ('KDPM2DiscreteScheduler', {'use_karras_sigmas': True}),
+            'DPM2 a': ('KDPM2AncestralDiscreteScheduler', {}),
+            'DPM2 a Karras': ('KDPM2AncestralDiscreteScheduler', {'use_karras_sigmas': True}),
+            'Euler': ('EulerDiscreteScheduler', {}),
+            'Euler a': ('EulerAncestralDiscreteScheduler', {}),
+            'Heun': ('HeunDiscreteScheduler', {}),
+            'LMS': ('LMSDiscreteScheduler', {}),
+            'LMS Karras': ('LMSDiscreteScheduler', {'use_karras_sigmas': True})
+        }
         self.modelWeightRoot = modelWeightRoot
         self.modelCfgDict = modelCfgDict
         self.defaultDType = defaultDType
@@ -36,7 +53,7 @@ class DiffusionCreator:
         self.blendMetaInfoDict = {}
         self.specifiedBlendInfo = None
         if self.modelCfgDict is not None:
-            self.loadModel(blendInfoFile,loadMode)
+            self.loadModel(blendInfoFile, loadMode)
 
     def parseModelPath(self, modelPath, modelWeightRoot):
         if modelPath[0] == '.':
@@ -44,9 +61,9 @@ class DiffusionCreator:
                 modelWeightRoot, modelPath[1:])
         return modelPath
 
-    def loadModel(self,blendInfoFile,blendMode):
+    def loadModel(self, blendInfoFile, blendMode):
         if blendInfoFile is not None:
-            with open(blendInfoFile,'r') as f:
+            with open(blendInfoFile, 'r') as f:
                 self.specifiedBlendInfo = json.load(f)
                 self.modelCfgDict['models'] = self.specifiedBlendInfo['models']['models']
                 blendMode = self.specifiedBlendInfo['blendInfo']['mode']
@@ -55,7 +72,8 @@ class DiffusionCreator:
         baseModelName = self.modelCfgDict['models'][0]['name']
         tempUNet = copy.deepcopy(self.modelUNetList[baseModelName])
         if len(self.modelCfgDict['models']) > 1:
-            unetWeight = self.blendModel(self.modelCfgDict['models'],blendMode=blendMode)
+            unetWeight = self.blendModel(
+                self.modelCfgDict['models'], blendMode=blendMode)
             tempUNet.load_state_dict(unetWeight)
 
         baseModelName = self.parseModelPath(
@@ -70,37 +88,41 @@ class DiffusionCreator:
             vaePath = self.parseModelPath(
                 self.modelCfgDict['vae'], self.modelWeightRoot)
             pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot,local_files_only=True, torch_dtype=self.defaultDType)
+                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
+        # from diffusers import ConsistencyDecoderVAE
+        # pipeArgDict['vae'] = ConsistencyDecoderVAE.from_pretrained("openai/consistency-decoder", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
 
         if 'textEncoder' in self.modelCfgDict.keys():
             textEncoderPath = self.parseModelPath(
                 self.modelCfgDict['textEncoder'], self.modelWeightRoot)
             pipeArgDict['text_encoder'] = CLIPTextModel.from_pretrained(
-                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot,local_files_only=True, torch_dtype=self.defaultDType)
+                textEncoderPath, subfolder='text_encoder', cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
             pipeArgDict['tokenizer'] = CLIPTokenizer.from_pretrained(
                 textEncoderPath, subfolder='tokenizer', cache_dir=self.modelWeightRoot)
 
         if 'multiUNet' in self.modelCfgDict.keys():
             self.pipe = StableDiffusionLongPromptWeightingMultiUNetPipeline.from_pretrained(
-                baseModelName, cache_dir=self.modelWeightRoot,local_files_only=True,
+                baseModelName, cache_dir=self.modelWeightRoot, local_files_only=True,
                 unet=self.modelUNetList[self.modelCfgDict['models'][0]['name']],
                 feature_extractor=None,
                 safety_checker=None,
                 torch_dtype=self.defaultDType,
                 **pipeArgDict
             )
-            print('%s -> %s'%(self.modelCfgDict['models'][0]['name'],
-                              self.modelUNetList[self.modelCfgDict['models'][0]['name']].device))
-            modelCnt=1
+            print('%s -> %s' % (self.modelCfgDict['models'][0]['name'],
+                                self.modelUNetList[self.modelCfgDict['models'][0]['name']].device))
+            modelCnt = 1
             for model in self.modelCfgDict['models'][1:]:
-                self.modelUNetList[model['name']].enable_xformers_memory_efficient_attention()
-                self.modelUNetList[model['name']].to('cuda:%d'%(modelCnt//2))
-                print('%s -> %s'%(model['name'],self.modelUNetList[model['name']].device))                
+                self.modelUNetList[model['name']
+                                   ].enable_xformers_memory_efficient_attention()
+                self.modelUNetList[model['name']].to('cuda:%d' % (modelCnt//2))
+                print('%s -> %s' %
+                      (model['name'], self.modelUNetList[model['name']].device))
                 modelCnt = modelCnt+1
                 self.pipe.appendExtraUNet(self.modelUNetList[model['name']])
         else:
             self.pipe = StableDiffusionLongPromptWeightingPipeline.from_pretrained(
-                baseModelName, cache_dir=self.modelWeightRoot,local_files_only=True,
+                baseModelName, cache_dir=self.modelWeightRoot, local_files_only=True,
                 unet=tempUNet,
                 feature_extractor=None,
                 safety_checker=None,
@@ -109,30 +131,49 @@ class DiffusionCreator:
             )
 
         if 'scheduler' in self.modelCfgDict.keys():
-            if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
-                self.pipe.scheduler = DDIMScheduler(
-                    **{
-                        "beta_end": 0.012,
-                        "beta_schedule": "scaled_linear",
-                        "beta_start": 0.00085,
-                        "clip_sample": False,
-                        "num_train_timesteps": 1000,
-                        "prediction_type": "epsilon",
-                        "set_alpha_to_one": False,
-                        "steps_offset": 1,
-                    }
-                )
+            # if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
+            #     # self.pipe.scheduler = DDIMScheduler(
+            #     #     **{
+            #     #         "beta_end": 0.012,
+            #     #         "beta_schedule": "scaled_linear",
+            #     #         "beta_start": 0.00085,
+            #     #         "clip_sample": False,
+            #     #         "num_train_timesteps": 1000,
+            #     #         "prediction_type": "epsilon",
+            #     #         "set_alpha_to_one": False,
+            #     #         "steps_offset": 1,
+            #     #     }
+            #     # )
+            #     pass
+            # 'epsilon' #"v_prediction"
+            prediction_type = self.pipe.scheduler.config.prediction_type
+            if self.modelCfgDict['scheduler'] == 'SASolverScheduler':
+                from sa_solver_diffusers import SASolverScheduler
+                self.pipe.scheduler = SASolverScheduler.from_config(
+                    self.pipe.scheduler.config, algorithm_type='data_prediction',
+                    tau_func=lambda t: 1 if 200 <= t <= 800 else 0,
+                    predictor_order=3, corrector_order=4,
+                    prediction_type=prediction_type)  # predictor_order=3, corrector_order=4
+            elif self.modelCfgDict['scheduler'] in self.schedulerMapping.keys():
+                schedulerName, schedulerExtraConfig = self.schedulerMapping[
+                    self.modelCfgDict['scheduler']]
+                scheduer = getattr(diffusers, schedulerName)
+                self.pipe.scheduler = scheduer.from_config(
+                    self.pipe.scheduler.config, **schedulerExtraConfig)  # predictor_order=3, corrector_order=4
             else:
                 scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
                 self.pipe.scheduler = scheduer.from_config(
-                    self.pipe.scheduler.config)
-        if 'loras' in self.modelCfgDict.keys():  
+                    self.pipe.scheduler.config, prediction_type=prediction_type)
+
+        if 'loras' in self.modelCfgDict.keys():
             if len(self.modelCfgDict['loras']) > 1:
                 self.loadMultiLora(self.modelCfgDict['loras'])
-                lora = self.blendLora(self.modelCfgDict['loras'],blendMode=blendMode)
+                lora = self.blendLora(
+                    self.modelCfgDict['loras'], blendMode=blendMode)
             else:
-                lora,_ = self.pipe.lora_state_dict(self.modelCfgDict['loras'][0]['name'])
-            self.pipe.load_lora_weights(lora)           
+                lora, _ = self.pipe.lora_state_dict(
+                    self.modelCfgDict['loras'][0]['name'])
+            self.pipe.load_lora_weights(lora)
             self.applyLora = True
         else:
             self.applyLora = False
@@ -152,7 +193,7 @@ class DiffusionCreator:
             unet = UNet2DConditionModel.from_pretrained(
                 modelName,
                 subfolder='unet',
-                cache_dir=self.modelWeightRoot,local_files_only=True,
+                cache_dir=self.modelWeightRoot, local_files_only=True,
                 torch_dtype=self.defaultDType)
 
             self.modelUNetList[modelNameRaw] = unet
@@ -184,7 +225,7 @@ class DiffusionCreator:
             for weightKey in firstModelWeightKeys[0]:
                 if self.specifiedBlendInfo is not None:
                     randomIndex = self.specifiedBlendInfo['blendInfo']['param'][weightKey]
-                else:          
+                else:
                     randomIndex = random.randint(0, len(blendParamDictList)-1)
                 choosenModelParamDict = blendParamDictList[randomIndex]
                 choosenModelName = choosenModelParamDict['name']
@@ -229,7 +270,7 @@ class DiffusionCreator:
             for weightKey in firstModelWeightKeys:
                 if self.specifiedBlendInfo is not None:
                     randomIndex = self.specifiedBlendInfo['blendInfo']['param'][weightKey]
-                else:          
+                else:
                     randomIndex = random.randint(0, len(blendParamDictList)-1)
                 choosenModelParamDict = blendParamDictList[randomIndex]
                 choosenModelName = choosenModelParamDict['name']
@@ -251,34 +292,56 @@ class DiffusionCreator:
                 for weightKey, weightTensor in tempStateDict.items():
                     tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
                         weightKey]*modelFactor
+        elif blendMode == 'EMA':
+            modelIdx = 0
+            modelNum = len(blendParamDictList)
+            beta = 0.9
+            print(list(range(modelNum-1, -1, -1)))
+            EMAFactorList = [
+                (1-beta)*pow(beta, t)/(1-pow(beta, modelNum)) for t in range(modelNum-1, -1, -1)
+            ]
+            print(EMAFactorList)
+            print(sum(EMAFactorList))
+
+            for weightKey, weightTensor in self.modelUNetList[firstModelName].state_dict().items():
+                tempStateDict[weightKey] = weightTensor*EMAFactorList[0]
+
+            for modelParamDict, factor in zip(blendParamDictList[1:], EMAFactorList[1:]):
+                modelName = modelParamDict['name']
+                for weightKey, weightTensor in tempStateDict.items():
+                    tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
+                        weightKey]*factor
+
         elif blendMode == 'bavMix':
             factorDict = {0: firstModelFactor}
             for key in self.modelUNetList[firstModelName].state_dict().keys():
-                values = [model.state_dict()[key] for model in self.modelUNetList.values()]
+                values = [model.state_dict()[key]
+                          for model in self.modelUNetList.values()]
                 mean_value = sum(values) / len(values)
 
                 alpha = 0.4
                 beta = 1.6
                 tempStateDict[key] = mean_value * (abs(self.modelUNetList[firstModelName].state_dict()[key] - alpha*mean_value) > abs(self.modelUNetList[firstModelName].state_dict()[key] - beta*values[0])) \
-                    + values[0] * (abs(self.modelUNetList[firstModelName].state_dict()[key] - alpha*mean_value) <= abs(self.modelUNetList[firstModelName].state_dict()[key] - beta*values[0]))
-
+                    + values[0] * (abs(self.modelUNetList[firstModelName].state_dict()[key] - alpha*mean_value)
+                                   <= abs(self.modelUNetList[firstModelName].state_dict()[key] - beta*values[0]))
 
             blendMetaInfoDict['param'] = factorDict
 
         self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
-    
-    def recordBlendMetaInfo(self,outputPath):
-        with open(outputPath,'w') as f:
-            json.dump({'blendInfo':self.blendMetaInfoDict,'models':self.modelCfgDict},f)
 
-    def outputUNetWeightInfo(self,outputPath):
-        with open(outputPath,'w') as f:
+    def recordBlendMetaInfo(self, outputPath):
+        with open(outputPath, 'w') as f:
+            json.dump({'blendInfo': self.blendMetaInfoDict,
+                      'models': self.modelCfgDict}, f)
+
+    def outputUNetWeightInfo(self, outputPath):
+        with open(outputPath, 'w') as f:
             for weightKey in self.pipe.unet.state_dict():
                 f.write(weightKey+'\n')
 
-    def exportSDModel(self,outputPath):
+    def exportSDModel(self, outputPath):
         exportToSD(self.pipe.text_encoder.state_dict(),
                    self.pipe.unet.state_dict(),
                    self.pipe.vae.state_dict(),
@@ -297,20 +360,18 @@ class DiffusionCreator:
                      "thumbnail": None, "GPS": {}}
         exif_dat = piexif.dump(exif_dict)
         return exif_dat
-    
-    def reproduce(self,refImagePath,device='cuda'):
+
+    def reproduce(self, refImagePath, device='cuda'):
         img = Image.open(refImagePath)
         exif_dict = piexif.load(img.info['exif'])
-        exifGenMetaInfoDict = json.loads(exif_dict['Exif'][piexif.ExifIFD.MakerNote])
+        exifGenMetaInfoDict = json.loads(
+            exif_dict['Exif'][piexif.ExifIFD.MakerNote])
         self.modelCfgDict = exifGenMetaInfoDict.pop('model')
-        self.loadModel(None,'weightMix')
+        self.loadModel(None, 'weightMix')
         self.to(device)
         exifGenMetaInfoDict.pop('blendMetaInfo')
-        self.generate(exifGenMetaInfoDict['prompt'],outputDir='reproduce_imgs',
+        self.generate(exifGenMetaInfoDict['prompt'], outputDir='reproduce_imgs',
                       seed=exifGenMetaInfoDict.pop('seed'), extraArgDict=exifGenMetaInfoDict)
-
-
-        
 
     def generate(self, prompt,
                  outputDir='./imgs',
@@ -322,7 +383,6 @@ class DiffusionCreator:
             self.randGenerator.manual_seed(seed)
         else:
             self.randGenerator.manual_seed(seed)
-
 
         if (not self.applyLora) and 'cross_attention_kwargs' in extraArgDict.keys():
             del extraArgDict['cross_attention_kwargs']
@@ -354,6 +414,8 @@ class DiffusionCreator:
                     prompt = argDict['originalPrompt']
                 else:
                     prompt = argDict['prompt']
+                if len(prompt) > 133:
+                    prompt = prompt[0:133]
                 outputDir = os.path.join(
                     outputDir, os.path.normpath(prompt))
 
@@ -362,6 +424,8 @@ class DiffusionCreator:
 
         if 'originalPrompt' in argDict.keys():
             del argDict['originalPrompt']
+        if 'negativePrompt' in argDict.keys() and argDict['negativePrompt'] == '':
+            argDict['negativePrompt'] = None
 
         image = self.pipe(generator=self.randGenerator,
                           **argDict
