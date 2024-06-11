@@ -59,7 +59,7 @@ class DiffusionCreator:
         vae = AutoencoderKL.from_pretrained(
             "madebyollin/sdxl-vae-fp16-fix",cache_dir=self.modelWeightRoot,local_files_only=True, subfolder=None,
             torch_dtype=self.defaultDType
-        )
+        )     
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             baseModelName, cache_dir=self.modelWeightRoot,
             vae=vae,
@@ -101,6 +101,9 @@ class DiffusionCreator:
                         "steps_offset": 1,
                     }
                 )
+            elif self.modelCfgDict['scheduler'] == 'SASolverScheduler':
+                from sa_solver_diffusers import SASolverScheduler                
+                self.pipe.scheduler = SASolverScheduler.from_config(self.pipe.scheduler.config, algorithm_type='data_prediction', tau_func=lambda t: 1 if 200 <= t <= 800 else 0, predictor_order=3, corrector_order=4) #predictor_order=3, corrector_order=4             
             else:
                 scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
                 self.pipe.scheduler = scheduer.from_config(
@@ -151,6 +154,15 @@ class DiffusionCreator:
         self.generate(exifGenMetaInfoDict['prompt'], outputDir='reproduce_imgs',
                       seed=exifGenMetaInfoDict.pop('seed'), extraArgDict=exifGenMetaInfoDict)
 
+    def genImageJiasaw(self, imageList, width, height, col, row, outPath):
+        to_image = Image.new('RGB', (col * width, row * height))  # 创建一个新图
+        # 循环遍历，把每张图片按顺序粘贴到对应位置上
+        for y in range(row):
+            for x in range(col):
+                from_image = imageList[y*col+x]
+                to_image.paste(from_image, (x * width, y * height))
+        return to_image.save(outPath, quality=90)  # 保存新图
+
     def generate(self, prompt,
                  outputDir='./imgs',
                  seed=None, usePromptAsSubDir=False,
@@ -199,7 +211,8 @@ class DiffusionCreator:
 
         if 'originalPrompt' in argDict.keys():
             del argDict['originalPrompt']
-
+        if 'negativePrompt' in argDict.keys() and argDict['negativePrompt'] == '':
+            argDict['negativePrompt'] = None
         # image = self.pipe(generator=self.randGenerator,
         #                   **argDict
         #                   ).images[0]

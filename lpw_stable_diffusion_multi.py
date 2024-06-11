@@ -822,9 +822,9 @@ class StableDiffusionLongPromptWeightingMultiUNetPipeline(StableDiffusionPipelin
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
 
-            tsInterval = self.scheduler.config.num_train_timesteps // (len(self.unetList))
-
-            selectedUNet = self.unetList[int(t)//tsInterval]
+            tsInterval = self.scheduler.config.num_train_timesteps / (len(self.unetList))
+            
+            selectedUNet = self.unetList[int(int(t)/tsInterval)]
             # predict the noise residual
             
             sourceDevice = latent_model_input.device
