@@ -27,17 +27,16 @@ class ModelMatrixComparator:
         return seedList
 
     def loadCreator(self, model):
-        modelWeightRoot, modelDictList = model
+        modelWeightRoot, modelCfgDict = model
         cacheKey = str(model)
         if cacheKey in self.creatorCache.keys():
             creator = self.creatorCache[cacheKey]
         else:
             creator = DiffusionCreator(modelWeightRoot=modelWeightRoot,
                                        # To use local weight you should start with "."
-                                       modelDictList=modelDictList,
+                                       modelCfgDict=modelCfgDict,
                                        defaultDType=torch.float16,
                                        useXformers=True,
-                                       useDDIM=True,
                                        )
             self.creatorCache[cacheKey] = creator
         creator.to('cuda')
@@ -52,8 +51,8 @@ class ModelMatrixComparator:
         genArgDict = {
             'height': randomSize[0],
             'width': randomSize[1],
-            'num_inference_steps': 50,
-            'guidance_scale': 8
+            'num_inference_steps': 40,
+            'guidance_scale': 9
         }
         prompt = self.promptGen.getPrompt()
         print('Prompt: ', prompt['prompt'])
