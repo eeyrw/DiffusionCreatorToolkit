@@ -147,14 +147,7 @@ class DiffusionCreator:
             #     pass
             # 'epsilon' #"v_prediction"
             prediction_type = self.pipe.scheduler.config.prediction_type
-            if self.modelCfgDict['scheduler'] == 'SASolverScheduler':
-                from sa_solver_diffusers import SASolverScheduler
-                self.pipe.scheduler = SASolverScheduler.from_config(
-                    self.pipe.scheduler.config, algorithm_type='data_prediction',
-                    tau_func=lambda t: 1 if 200 <= t <= 800 else 0,
-                    predictor_order=3, corrector_order=4,
-                    prediction_type=prediction_type)  # predictor_order=3, corrector_order=4
-            elif self.modelCfgDict['scheduler'] in self.schedulerMapping.keys():
+            if self.modelCfgDict['scheduler'] in self.schedulerMapping.keys():
                 schedulerName, schedulerExtraConfig = self.schedulerMapping[
                     self.modelCfgDict['scheduler']]
                 scheduer = getattr(diffusers, schedulerName)
