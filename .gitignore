@@ -130,4 +130,4 @@ dmypy.json
 
 diffusers_venv/
 imgs*/
-MyGenerator.py
+my_generator/
