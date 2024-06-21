@@ -87,8 +87,12 @@ class DiffusionCreator:
         if 'vae' in self.modelCfgDict.keys():
             vaePath = self.parseModelPath(
                 self.modelCfgDict['vae'], self.modelWeightRoot)
-            pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
+            if os.path.isdir(os.path.join(vaePath, 'vae')):
+                pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
+                    vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
+            else:
+                pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
+                    vaePath, cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
         # from diffusers import ConsistencyDecoderVAE
         # pipeArgDict['vae'] = ConsistencyDecoderVAE.from_pretrained("openai/consistency-decoder", cache_dir=self.modelWeightRoot, torch_dtype=self.defaultDType)
 
@@ -152,7 +156,8 @@ class DiffusionCreator:
                     self.modelCfgDict['scheduler']]
                 scheduer = getattr(diffusers, schedulerName)
                 self.pipe.scheduler = scheduer.from_config(
-                    self.pipe.scheduler.config, **schedulerExtraConfig)  # predictor_order=3, corrector_order=4
+                    # predictor_order=3, corrector_order=4
+                    self.pipe.scheduler.config, **schedulerExtraConfig)
             else:
                 scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
                 self.pipe.scheduler = scheduer.from_config(
