@@ -214,8 +214,11 @@ def get_unweighted_text_embeddings(
             # cover the head and the tail by the starting and the ending tokens
             text_input_chunk[:, 0] = text_input[0, 0]
             text_input_chunk[:, -1] = text_input[0, -1]
-            text_embedding = pipe.text_encoder(text_input_chunk)[0]
-
+            if pipe.clip_penultimate:
+                text_embedding = pipe.text_encoder.text_model.final_layer_norm(
+                        pipe.text_encoder(text_input_chunk, output_hidden_states=True)['hidden_states'][-2])
+            else:
+                text_embedding = pipe.text_encoder(text_input_chunk)[0]
             if no_boseos_middle:
                 if i == 0:
                     # discard the ending token
@@ -230,7 +233,11 @@ def get_unweighted_text_embeddings(
             text_embeddings.append(text_embedding)
         text_embeddings = torch.concat(text_embeddings, axis=1)
     else:
-        text_embeddings = pipe.text_encoder(text_input)[0]
+        if pipe.clip_penultimate:
+            text_embeddings = pipe.text_encoder.text_model.final_layer_norm(
+                    pipe.text_encoder(text_input, output_hidden_states=True)['hidden_states'][-2])
+        else:
+            text_embeddings = pipe.text_encoder(text_input)[0]
     return text_embeddings
 
 
@@ -532,6 +539,9 @@ class StableDiffusionLongPromptWeightingPipeline(
         self.register_to_config(
             requires_safety_checker=requires_safety_checker,
         )
+
+        
+        self.clip_penultimate = False
 
     def enable_vae_slicing(self):
         r"""

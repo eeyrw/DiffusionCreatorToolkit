@@ -12,6 +12,7 @@ import piexif
 import copy
 from DF2SD import exportToSD
 from PIL import Image
+from diffusers.models.model_loading_utils import load_state_dict
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # {
@@ -90,6 +91,14 @@ class DiffusionCreator:
             if os.path.isdir(os.path.join(vaePath, 'vae')):
                 pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
                     vaePath, subfolder='vae', cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
+            elif os.path.isfile(vaePath):
+                with open('assets/sd15_vae_default_cfg.json') as f:
+                    vae_cfg = json.load(f)
+                pipeArgDict['vae'] = AutoencoderKL(**vae_cfg)
+                vaeStateDict =  load_state_dict(vaePath)
+                pipeArgDict['vae'].load_state_dict(vaeStateDict)
+                pipeArgDict['vae'].to(self.defaultDType)
+                pipeArgDict['vae'].eval()
             else:
                 pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
                     vaePath, cache_dir=self.modelWeightRoot, local_files_only=True, torch_dtype=self.defaultDType)
@@ -133,23 +142,9 @@ class DiffusionCreator:
                 torch_dtype=self.defaultDType,
                 **pipeArgDict
             )
+            #self.pipe.clip_penultimate = True
 
         if 'scheduler' in self.modelCfgDict.keys():
-            # if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
-            #     # self.pipe.scheduler = DDIMScheduler(
-            #     #     **{
-            #     #         "beta_end": 0.012,
-            #     #         "beta_schedule": "scaled_linear",
-            #     #         "beta_start": 0.00085,
-            #     #         "clip_sample": False,
-            #     #         "num_train_timesteps": 1000,
-            #     #         "prediction_type": "epsilon",
-            #     #         "set_alpha_to_one": False,
-            #     #         "steps_offset": 1,
-            #     #     }
-            #     # )
-            #     pass
-            # 'epsilon' #"v_prediction"
             prediction_type = self.pipe.scheduler.config.prediction_type
             if self.modelCfgDict['scheduler'] in self.schedulerMapping.keys():
                 schedulerName, schedulerExtraConfig = self.schedulerMapping[
@@ -159,9 +154,23 @@ class DiffusionCreator:
                     # predictor_order=3, corrector_order=4
                     self.pipe.scheduler.config, **schedulerExtraConfig)
             else:
-                scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
-                self.pipe.scheduler = scheduer.from_config(
-                    self.pipe.scheduler.config, prediction_type=prediction_type)
+                if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
+                    self.pipe.scheduler = DDIMScheduler(
+                        **{
+                            "beta_end": 0.012,
+                            "beta_schedule": "scaled_linear",
+                            "beta_start": 0.00085,
+                            "clip_sample": False,
+                            "num_train_timesteps": 1000,
+                            "prediction_type": "epsilon",
+                            "set_alpha_to_one": False,
+                            "steps_offset": 1,
+                        }
+                    )
+                else:
+                    scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
+                    self.pipe.scheduler = scheduer.from_config(
+                        self.pipe.scheduler.config, prediction_type=prediction_type)
 
         if 'loras' in self.modelCfgDict.keys():
             if len(self.modelCfgDict['loras']) > 1:
