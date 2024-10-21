@@ -129,7 +129,25 @@ class DiffusionCreator:
                 for weightKey, weightTensor in tempStateDict.items():
                     tempStateDict[weightKey] += self.loraList[modelName][0][
                         weightKey] * modelFactor
+        elif blendMode == 'EMA':
+            modelIdx = 0
+            modelNum = len(blendParamDictList)
+            beta = 0.9
+            print(list(range(modelNum-1, -1, -1)))
+            EMAFactorList = [
+                (1-beta)*pow(beta, t)/(1-pow(beta, modelNum)) for t in range(modelNum-1, -1, -1)
+            ]
+            print(EMAFactorList)
+            print(sum(EMAFactorList))
 
+            for weightKey, weightTensor in self.loraList[firstModelName][0].items():
+                tempStateDict[weightKey] = weightTensor*EMAFactorList[0]
+
+            for modelParamDict, factor in zip(blendParamDictList[1:], EMAFactorList[1:]):
+                modelName = modelParamDict['name']
+                for weightKey, weightTensor in tempStateDict.items():
+                    tempStateDict[weightKey] += self.loraList[modelName][0][
+                        weightKey]*factor
         self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
@@ -299,6 +317,9 @@ class DiffusionCreator:
             local_files_only=True,
             add_watermarker=False,
             **pipeArgDict)
+        
+        #self.pipe.load_textual_inversion("negative_hand-neg.pt")
+
 
         if 'refiner' in self.modelCfgDict['models'][0].keys():
             self.useRefiner = True
@@ -356,6 +377,9 @@ class DiffusionCreator:
             #     nk = k.replace('module.', '')
             #     loraDict[nk]=lora[k]
             self.pipe.load_lora_weights(lora)
+            self.lora_scale = 1.0
+            self.pipe.fuse_lora(lora_scale=self.lora_scale)
+            #self.pipe.unload_lora_weights()
             self.applyLora = True
         else:
             self.applyLora = False
@@ -432,6 +456,13 @@ class DiffusionCreator:
             self.randGenerator.manual_seed(seed)
         else:
             self.randGenerator.manual_seed(seed)
+
+        if self.applyLora and 'cross_attention_kwargs' in extraArgDict.keys():
+            if self.lora_scale!=extraArgDict['cross_attention_kwargs']['scale']:
+                self.lora_scale = extraArgDict['cross_attention_kwargs']['scale']
+                self.pipe.unfuse_lora()
+                self.pipe.fuse_lora(lora_scale=self.lora_scale)
+                #self.pipe.unload_lora_weights()
 
         if (not self.applyLora
             ) and 'cross_attention_kwargs' in extraArgDict.keys():
