@@ -1,7 +1,9 @@
-from diffusers import UniPCMultistepScheduler, DDIMScheduler,StableDiffusionXLPipeline,StableDiffusionXLImg2ImgPipeline
+from torch import nn
+from diffusers import UniPCMultistepScheduler, DDIMScheduler, StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
 import diffusers
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
 from safetensors import safe_open
+import safetensors
 from transformers import CLIPTextModel, CLIPTokenizer
 import random
 import torch
@@ -30,8 +32,10 @@ class DiffusionCreator:
                  modelCfgDict=None,
                  defaultDType=torch.float16,
                  useXformers=False,
+                 local_files_only=False,
                  loadMode='weightMix',
-                 blendInfoFile=None) -> None:
+                 blendInfoFile=None,
+                 ) -> None:
         self.schedulerMapping = {
             'DPM++ 2M': ('DPMSolverMultistepScheduler', {}),
             'DPM++ 2M Karras': ('DPMSolverMultistepScheduler', {
@@ -72,6 +76,7 @@ class DiffusionCreator:
         self.blendMetaInfoDict = {}
         self.specifiedBlendInfo = None
         self.useRefiner = False
+        self.local_files_only = local_files_only
         if self.modelCfgDict is not None:
             self.loadModel(blendInfoFile, loadMode)
 
@@ -133,25 +138,28 @@ class DiffusionCreator:
             modelIdx = 0
             modelNum = len(blendParamDictList)
             beta = 0.9
-            print(list(range(modelNum-1, -1, -1)))
+            print(list(range(modelNum - 1, -1, -1)))
             EMAFactorList = [
-                (1-beta)*pow(beta, t)/(1-pow(beta, modelNum)) for t in range(modelNum-1, -1, -1)
+                (1 - beta) * pow(beta, t) / (1 - pow(beta, modelNum))
+                for t in range(modelNum - 1, -1, -1)
             ]
             print(EMAFactorList)
             print(sum(EMAFactorList))
 
-            for weightKey, weightTensor in self.loraList[firstModelName][0].items():
-                tempStateDict[weightKey] = weightTensor*EMAFactorList[0]
+            for weightKey, weightTensor in self.loraList[firstModelName][
+                    0].items():
+                tempStateDict[weightKey] = weightTensor * EMAFactorList[0]
 
-            for modelParamDict, factor in zip(blendParamDictList[1:], EMAFactorList[1:]):
+            for modelParamDict, factor in zip(blendParamDictList[1:],
+                                              EMAFactorList[1:]):
                 modelName = modelParamDict['name']
                 for weightKey, weightTensor in tempStateDict.items():
                     tempStateDict[weightKey] += self.loraList[modelName][0][
-                        weightKey]*factor
+                        weightKey] * factor
         self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
-    
+
     def blendModel(self, blendParamDictList, blendMode='weightMix'):
         firstModelParamDict = blendParamDictList[0]
         firstModelName = firstModelParamDict['name']
@@ -160,29 +168,29 @@ class DiffusionCreator:
         ).keys()
 
         tempStateDict = {}
-        blendMetaInfoDict = {
-            'mode': blendMode,
-            'param': None
-        }
+        blendMetaInfoDict = {'mode': blendMode, 'param': None}
 
         if blendMode == 'randLayer':
             tempStateChoosenDict = {}
             for weightKey in firstModelWeightKeys:
                 if self.specifiedBlendInfo is not None:
-                    randomIndex = self.specifiedBlendInfo['blendInfo']['param'][weightKey]
+                    randomIndex = self.specifiedBlendInfo['blendInfo'][
+                        'param'][weightKey]
                 else:
-                    randomIndex = random.randint(0, len(blendParamDictList)-1)
+                    randomIndex = random.randint(0,
+                                                 len(blendParamDictList) - 1)
                 choosenModelParamDict = blendParamDictList[randomIndex]
                 choosenModelName = choosenModelParamDict['name']
-                tempStateDict[weightKey] = self.modelUNetList[choosenModelName].state_dict()[
-                    weightKey]
+                tempStateDict[weightKey] = self.modelUNetList[
+                    choosenModelName].state_dict()[weightKey]
                 tempStateChoosenDict[weightKey] = randomIndex
             blendMetaInfoDict['param'] = tempStateChoosenDict
         elif blendMode == 'weightMix':
             modelIdx = 0
             factorDict = {modelIdx: firstModelFactor}
-            for weightKey, weightTensor in self.modelUNetList[firstModelName].state_dict().items():
-                tempStateDict[weightKey] = weightTensor*firstModelFactor
+            for weightKey, weightTensor in self.modelUNetList[
+                    firstModelName].state_dict().items():
+                tempStateDict[weightKey] = weightTensor * firstModelFactor
 
             for modelParamDict in blendParamDictList[1:]:
                 modelName = modelParamDict['name']
@@ -190,33 +198,38 @@ class DiffusionCreator:
                 modelIdx += 1
                 factorDict[modelIdx] = modelFactor
                 for weightKey, weightTensor in tempStateDict.items():
-                    tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
-                        weightKey]*modelFactor
+                    tempStateDict[weightKey] += self.modelUNetList[
+                        modelName].state_dict()[weightKey] * modelFactor
         elif blendMode == 'EMA':
             modelIdx = 0
             modelNum = len(blendParamDictList)
             beta = 0.9
-            print(list(range(modelNum-1, -1, -1)))
+            print(list(range(modelNum - 1, -1, -1)))
             EMAFactorList = [
-                (1-beta)*pow(beta, t)/(1-pow(beta, modelNum)) for t in range(modelNum-1, -1, -1)
+                (1 - beta) * pow(beta, t) / (1 - pow(beta, modelNum))
+                for t in range(modelNum - 1, -1, -1)
             ]
             print(EMAFactorList)
             print(sum(EMAFactorList))
 
-            for weightKey, weightTensor in self.modelUNetList[firstModelName].state_dict().items():
-                tempStateDict[weightKey] = weightTensor*EMAFactorList[0]
+            for weightKey, weightTensor in self.modelUNetList[
+                    firstModelName].state_dict().items():
+                tempStateDict[weightKey] = weightTensor * EMAFactorList[0]
 
-            for modelParamDict, factor in zip(blendParamDictList[1:], EMAFactorList[1:]):
+            for modelParamDict, factor in zip(blendParamDictList[1:],
+                                              EMAFactorList[1:]):
                 modelName = modelParamDict['name']
                 for weightKey, weightTensor in tempStateDict.items():
-                    tempStateDict[weightKey] += self.modelUNetList[modelName].state_dict()[
-                        weightKey]*factor
+                    tempStateDict[weightKey] += self.modelUNetList[
+                        modelName].state_dict()[weightKey] * factor
 
         elif blendMode == 'bavMix':
             factorDict = {0: firstModelFactor}
             for key in self.modelUNetList[firstModelName].state_dict().keys():
-                values = [model.state_dict()[key]
-                          for model in self.modelUNetList.values()]
+                values = [
+                    model.state_dict()[key]
+                    for model in self.modelUNetList.values()
+                ]
                 mean_value = sum(values) / len(values)
 
                 alpha = 0.4
@@ -230,7 +243,7 @@ class DiffusionCreator:
         self.blendMetaInfoDict = blendMetaInfoDict
 
         return tempStateDict
-    
+
     def loadMultiModel(self, blendParamDictList):
         self.modelUNetList = {}
         for blendParamDict in blendParamDictList:
@@ -240,15 +253,16 @@ class DiffusionCreator:
             else:
                 variant = None
             if modelNameRaw[0] == '.':
-                modelName = os.path.join(
-                    self.modelWeightRoot, modelNameRaw[1:], 'unet')
+                modelName = os.path.join(self.modelWeightRoot,
+                                         modelNameRaw[1:], 'unet')
             else:
                 modelName = modelNameRaw
 
             unet = UNet2DConditionModel.from_pretrained(
                 modelName,
                 subfolder='unet',
-                cache_dir=self.modelWeightRoot, local_files_only=True,
+                cache_dir=self.modelWeightRoot,
+                local_files_only=self.local_files_only,
                 variant=variant,
                 torch_dtype=self.defaultDType)
 
@@ -259,7 +273,8 @@ class DiffusionCreator:
         if blendInfoFile is not None:
             with open(blendInfoFile, 'r') as f:
                 self.specifiedBlendInfo = json.load(f)
-                self.modelCfgDict['models'] = self.specifiedBlendInfo['models']['models']
+                self.modelCfgDict['models'] = self.specifiedBlendInfo[
+                    'models']['models']
                 blendMode = self.specifiedBlendInfo['blendInfo']['mode']
 
         self.loadMultiModel(self.modelCfgDict['models'])
@@ -272,26 +287,19 @@ class DiffusionCreator:
 
         tempUNet = copy.deepcopy(self.modelUNetList[baseModelName])
         if len(self.modelCfgDict['models']) > 1:
-            unetWeight = self.blendModel(
-                self.modelCfgDict['models'], blendMode=blendMode)
+            unetWeight = self.blendModel(self.modelCfgDict['models'],
+                                         blendMode=blendMode)
             tempUNet.load_state_dict(unetWeight)
 
-        baseModelName = self.parseModelPath(
-            baseModelName, self.modelWeightRoot)
+        baseModelName = self.parseModelPath(baseModelName,
+                                            self.modelWeightRoot)
 
         pipeArgDict = {}
 
         if 'vae' in self.modelCfgDict.keys():
             vaePath = self.parseModelPath(self.modelCfgDict['vae'],
                                           self.modelWeightRoot)
-            if os.path.isdir(os.path.join(vaePath, 'vae')):
-                pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                    vaePath,
-                    subfolder='vae',
-                    cache_dir=self.modelWeightRoot,
-                    local_files_only=True,
-                    torch_dtype=self.defaultDType)
-            elif os.path.isfile(vaePath):
+            if os.path.isfile(vaePath):
                 with open('assets/sdxl_vae_default_cfg.json') as f:
                     vae_cfg = json.load(f)
                 pipeArgDict['vae'] = AutoencoderKL(**vae_cfg)
@@ -300,12 +308,22 @@ class DiffusionCreator:
                 pipeArgDict['vae'].to(self.defaultDType)
                 pipeArgDict['vae'].eval()
             else:
-                pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
-                    vaePath,
-                    cache_dir=self.modelWeightRoot,
-                    local_files_only=True,
-                    torch_dtype=self.defaultDType)
-                
+                try:
+                    pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
+                        vaePath,
+                        subfolder='vae',
+                        cache_dir=self.modelWeightRoot,
+                        local_files_only=self.local_files_only,
+                        torch_dtype=self.defaultDType)
+                except Exception as e:
+                    try:
+                        pipeArgDict['vae'] = AutoencoderKL.from_pretrained(
+                            vaePath,
+                            cache_dir=self.modelWeightRoot,
+                            local_files_only=self.local_files_only,
+                            torch_dtype=self.defaultDType)
+                    except Exception as e:
+                        raise e
 
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             baseModelName,
@@ -314,12 +332,31 @@ class DiffusionCreator:
             variant=variant,
             use_safetensors=True,
             torch_dtype=self.defaultDType,
-            local_files_only=True,
+            local_files_only=self.local_files_only,
             add_watermarker=False,
             **pipeArgDict)
-        
-        #self.pipe.load_textual_inversion("negative_hand-neg.pt")
 
+        # self.modVAE(self.pipe.vae,0.95,0.95)
+
+        # self.pipe.load_textual_inversion("zPDXL3.safetensors")
+
+        # load embeddings to the text encoders
+        # state_dict = safetensors.torch.load_file('zPDXL3.safetensors', device="cpu")
+
+        # # load embeddings of text_encoder 1 (CLIP ViT-L/14)
+        # self.pipe.load_textual_inversion(
+        #     state_dict["clip_l"],
+        #     token="zPDXL3",
+        #     text_encoder=self.pipe.text_encoder,
+        #     tokenizer=self.pipe.tokenizer,
+        # )
+        # # load embeddings of text_encoder 2 (CLIP ViT-G/14)
+        # self.pipe.load_textual_inversion(
+        #     state_dict["clip_g"],
+        #     token="zPDXL3",
+        #     text_encoder=self.pipe.text_encoder_2,
+        #     tokenizer=self.pipe.tokenizer_2,
+        # )
 
         if 'refiner' in self.modelCfgDict['models'][0].keys():
             self.useRefiner = True
@@ -334,7 +371,7 @@ class DiffusionCreator:
                 variant="fp16",
                 add_watermarker=False,
                 cache_dir=self.modelWeightRoot,
-                local_files_only=True,
+                local_files_only=self.local_files_only,
                 **pipeArgDict)
 
         if 'scheduler' in self.modelCfgDict.keys():
@@ -345,7 +382,8 @@ class DiffusionCreator:
                 scheduer = getattr(diffusers, schedulerName)
                 self.pipe.scheduler = scheduer.from_config(
                     # predictor_order=3, corrector_order=4
-                    self.pipe.scheduler.config, **schedulerExtraConfig)
+                    self.pipe.scheduler.config,
+                    **schedulerExtraConfig)
             else:
                 if self.modelCfgDict['scheduler'] == 'DDIMScheduler':
                     self.pipe.scheduler = DDIMScheduler(
@@ -358,12 +396,13 @@ class DiffusionCreator:
                             "prediction_type": "epsilon",
                             "set_alpha_to_one": False,
                             "steps_offset": 1,
-                        }
-                    )
+                        })
                 else:
-                    scheduer = getattr(diffusers, self.modelCfgDict['scheduler'])
+                    scheduer = getattr(diffusers,
+                                       self.modelCfgDict['scheduler'])
                     self.pipe.scheduler = scheduer.from_config(
-                        self.pipe.scheduler.config, prediction_type=prediction_type)
+                        self.pipe.scheduler.config,
+                        prediction_type=prediction_type)
         if 'loras' in self.modelCfgDict.keys():
             if len(self.modelCfgDict['loras']) > 1:
                 self.loadMultiLora(self.modelCfgDict['loras'])
@@ -379,7 +418,7 @@ class DiffusionCreator:
             self.pipe.load_lora_weights(lora)
             self.lora_scale = 1.0
             self.pipe.fuse_lora(lora_scale=self.lora_scale)
-            #self.pipe.unload_lora_weights()
+            # self.pipe.unload_lora_weights()
             self.applyLora = True
         else:
             self.applyLora = False
@@ -387,6 +426,22 @@ class DiffusionCreator:
             self.pipe.enable_xformers_memory_efficient_attention()
             if self.useRefiner:
                 self.pipeRefiner.enable_xformers_memory_efficient_attention()
+
+    def modVAE(self, vae, contrastFactor, brightnessFactor, patch_encoder=False):
+        print('Applying modifications...')
+        if contrastFactor is not None:
+            vae.decoder.conv_out.weight = nn.Parameter(
+                vae.decoder.conv_out.weight * contrastFactor)
+            if patch_encoder:
+                vae.encoder.conv_in.weight = nn.Parameter(
+                    vae.encoder.conv_in.weight / contrastFactor)
+
+        if brightnessFactor is not None:
+            vae.decoder.conv_out.bias = nn.Parameter(
+                vae.decoder.conv_out.bias * brightnessFactor)
+            if patch_encoder:
+                vae.encoder.conv_in.bias = nn.Parameter(
+                    vae.encoder.conv_in.bias / brightnessFactor)
 
     def recordBlendMetaInfo(self, outputPath):
         with open(outputPath, 'w') as f:
@@ -458,14 +513,16 @@ class DiffusionCreator:
             self.randGenerator.manual_seed(seed)
 
         if self.applyLora and 'cross_attention_kwargs' in extraArgDict.keys():
-            if self.lora_scale!=extraArgDict['cross_attention_kwargs']['scale']:
-                self.lora_scale = extraArgDict['cross_attention_kwargs']['scale']
+            if self.lora_scale != extraArgDict['cross_attention_kwargs'][
+                    'scale']:
+                self.lora_scale = extraArgDict['cross_attention_kwargs'][
+                    'scale']
                 self.pipe.unfuse_lora()
                 self.pipe.fuse_lora(lora_scale=self.lora_scale)
-                #self.pipe.unload_lora_weights()
+                # self.pipe.unload_lora_weights()
 
         if (not self.applyLora
-            ) and 'cross_attention_kwargs' in extraArgDict.keys():
+                ) and 'cross_attention_kwargs' in extraArgDict.keys():
             del extraArgDict['cross_attention_kwargs']
 
         if 'prompt' in extraArgDict.keys():
@@ -539,10 +596,9 @@ class DiffusionCreator:
         if returnPILImage:
             return image
         else:
-            exif_dat = self.getExif(exifGenMetaInfoDict)
-            image.save(os.path.join(outputDir, '%d.jpg' % seed),
-                       quality=90,
-                       exif=exif_dat)
+            # exif_dat = self.getExif(exifGenMetaInfoDict)
+            image.save(os.path.join(outputDir, '%d.jpg' % seed), quality=90)
+            # exif=exif_dat)
 
     def to(self, device):
         self.pipe.to(device)
